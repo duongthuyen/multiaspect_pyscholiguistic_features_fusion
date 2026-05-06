@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict
 
 import numpy as np
 import pandas as pd
 
 from scripts.config import (
     AFFECTIVE_FEATURES_DIR,
+    FEATURES_DIR,
     LEXICAL_FEATURES_DIR,
     SEMANTIC_FEATURES_DIR,
     STRUCTURAL_FEATURES_DIR,
     SYNTACTIC_FEATURES_DIR,
-    FEATURES_DIR,
 )
 from scripts.features.affective import AffectiveExtractor
 from scripts.features.base import FeatureExtractorBase
@@ -22,6 +23,8 @@ from scripts.features.lexical import LexicalExtractor
 from scripts.features.semantic import SemanticExtractor
 from scripts.features.structural import StructuralExtractor
 from scripts.features.syntactic import SyntacticExtractor
+
+logger = logging.getLogger(__name__)
 
 
 class FeatureOrchestrator:
@@ -102,8 +105,10 @@ class FeatureOrchestrator:
                 output_path = group_dir / f"{sub_name}.parquet"
                 meta["dimensions"][f"{group_name}.{sub_name}"] = sub_extractor.DIM
                 if output_path.exists() and not force:
+                    logger.info("Skipping %s.%s (already exists)", group_name, sub_name)
                     outputs[group_name][sub_name] = output_path
                     continue
+                logger.info("Extracting %s.%s for %d rows...", group_name, sub_name, len(df))
                 post_ids = df[post_id_col].tolist()
                 texts = df[text_col].astype(str).tolist()
                 if hasattr(sub_extractor, "extract_batch"):
@@ -122,6 +127,7 @@ class FeatureOrchestrator:
                     ]
                 pd.DataFrame(rows).to_parquet(output_path, index=False)
                 outputs[group_name][sub_name] = output_path
+                logger.info("Saved %s.%s -> %s", group_name, sub_name, output_path)
 
         if split:
             split_dir = FEATURES_DIR / split
@@ -137,13 +143,11 @@ class FeatureOrchestrator:
         versions = {}
         try:
             import transformers
-
             versions["transformers"] = transformers.__version__
         except ImportError:
             pass
         try:
             import sentence_transformers
-
             versions["sentence_transformers"] = sentence_transformers.__version__
         except ImportError:
             pass

@@ -6,7 +6,7 @@ from scripts.models.fusion.late_concat import LateConcatFusion
 
 
 def build_fusion_model(fusion_type: str | None = None) -> nn.Module:
-    selected = (fusion_type or getattr(config, "fusion_type", config.FUSION_TYPE)).lower()
+    selected = (fusion_type or config.FUSION_TYPE).lower()
     if selected == "concat":
         return LateConcatFusion()
     if selected == "gated":

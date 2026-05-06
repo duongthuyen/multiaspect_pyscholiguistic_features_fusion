@@ -1,12 +1,12 @@
 {
-  "extraction_timestamp": "2026-05-05T16:32:44.745955+00:00",
-  "row_count": 13727,
+  "extraction_timestamp": "2026-05-06T11:02:34.379155+00:00",
+  "row_count": 1,
   "model_versions": {
     "transformers": "5.7.0",
     "sentence_transformers": "5.4.1"
   },
   "dimensions": {
-    "affective.vad": 3
+    "lexical.pronouns": 3
   },
   "split": "train"
 }

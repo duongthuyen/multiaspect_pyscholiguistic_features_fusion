@@ -1,7 +1,14 @@
-from pathlib import Path
+from __future__ import annotations
+
+import logging
+
 import pandas as pd
-from scripts.models.fusion.feature_loader import load_group_features
+
 from scripts import config
+from scripts.models.fusion.feature_loader import load_group_features
+from scripts.utils.logging_utils import setup_logging
+
+logger = logging.getLogger(__name__)
 
 GROUPS = ["semantic", "affective", "lexical", "syntactic", "structural"]
 SPLITS = ["train", "val", "test"]
@@ -9,9 +16,8 @@ SPLITS = ["train", "val", "test"]
 
 def combine_feature_group(group: str, split: str):
     post_ids, matrix = load_group_features(group, split=split)
-    print(f"{split} / {group}: {matrix.shape}")
+    logger.info("%s / %s: %s", split, group, matrix.shape)
 
-    # Optional: save combined group back to parquet
     out_dir = config.FEATURES_DIR / group / split
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -23,9 +29,10 @@ def combine_feature_group(group: str, split: str):
 
 
 if __name__ == "__main__":
+    setup_logging()
     for split in SPLITS:
         for group in GROUPS:
             try:
                 combine_feature_group(group, split)
-            except Exception as e:
-                print(f"Error combining {group}/{split}: {e}")
+            except Exception as exc:
+                logger.error("Error combining %s/%s: %s", group, split, exc)

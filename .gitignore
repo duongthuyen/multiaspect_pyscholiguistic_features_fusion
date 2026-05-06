@@ -10,12 +10,8 @@ env/
 *.egg-info/
 .pytest_cache/
 
-# Results 
-results/models/
-results/features/
-results/plots/
-results/logs/
-results/evaluation/
+# Generated run artifacts
+results/
 
 # But keep folder structure with README or .gitkeep files
 !results/.gitkeep

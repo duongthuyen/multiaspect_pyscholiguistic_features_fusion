@@ -4,60 +4,114 @@ Graduation research project at Hanoi University of Science and Technology.
 
 ## Overview
 
-This project classifies mental health conditions from Reddit posts using a multi-aspect feature fusion approach that combines:
+This project classifies mental health conditions from Reddit posts using five feature groups:
 
-- **Semantic features** — MentalRoBERTa embeddings
-- **Lexical features** — MTLD, word rates, pronouns, punctuation markers
-- **Syntactic features** — Complexity, POS ratios, readability
-- **Affective features** — GoEmotions scores, VAD scores, sentiment arc
-- **Structural features** — Sentence coherence, topic drift, coherence breaks, tense distribution
+- **Semantic** - MentalRoBERTa embeddings
+- **Lexical** - MTLD, word rates, pronouns, punctuation markers
+- **Syntactic** - Complexity, POS ratios, readability
+- **Affective** - GoEmotions scores, VAD scores, sentiment arc
+- **Structural** - Sentence coherence, topic drift, coherence breaks, tense distribution
 
-Features are combined with **late concatenation fusion** by default, with a gated fusion baseline available for comparison.
+The neural fusion models are **Late Concatenation** and **Gated Fusion**. Training can use either a single feature group or the full fused feature set. Classical baselines are also available: Logistic Regression, Random Forest, Support Vector Machine, and XGBoost.
 
 ## Dataset
 
 Reddit posts from the Murarka et al. (2021) dataset covering 6 classes:
 ADHD, Anxiety, Bipolar, Depression, PTSD, None (control).
 
-## Project Structure
-
-\`\`\`
-scripts/
-├── config.py                     # Central config
-├── data/                         # Data preprocessing & EDA
-├── features/                     # Feature extraction (5 groups)
-│   ├── semantic/
-│   ├── lexical/
-│   ├── syntactic/
-│   ├── affective/
-│   └── structural/
-├── analysis/                     # Statistical heatmaps
-├── models/                       # Fusion network + baselines
-└── evaluation/                   # Metrics & ablation
-\`\`\`
-
 ## Setup
 
-\`\`\`bash
-# Clone and enter
-git clone https://github.com/YOUR_USERNAME/mental-health-fusion.git
-cd mental-health-fusion
-
-# Create virtual environment
+```bash
 python -m venv amh_venv
-amh_venv\Scripts\activate   # Windows
-# source amh_venv/bin/activate   # macOS/Linux
-
-# Install dependencies
+amh_venv\Scripts\activate
 pip install -r requirements.txt
 python -m spacy download en_core_web_sm
-\`\`\`
+```
 
-## Requirements
+## Training
 
-See `requirements.txt`. Main dependencies:
-- PyTorch
-- transformers, datasets, evaluate
-- spaCy, NLTK
-- pandas, numpy, scikit-learn
-- matplotlib, seaborn
+Train a fusion model on all features:
+
+```bash
+python -m scripts.models.train_fusion --model concat --features fused
+python -m scripts.models.train_fusion --model gated --features fused
+```
+
+Train the same fusion pipeline on a single feature group:
+
+```bash
+python -m scripts.models.train_fusion --model concat --features semantic
+python -m scripts.models.train_fusion --model gated --features lexical
+```
+
+Train classical classifiers:
+
+```bash
+python -m scripts.models.classical.logistic_regression --features fused
+python -m scripts.models.classical.random_forest --features semantic
+python -m scripts.models.classical.support_vector_machine --features syntactic
+python -m scripts.models.classical.xgboost --features affective
+```
+
+Valid `--features` values are `semantic`, `lexical`, `syntactic`, `structural`, `affective`, and `fused`.
+
+## Evaluation
+
+Fusion models can be evaluated separately after training:
+
+```bash
+python -m scripts.models.evaluate_fusion --model concat --features fused --split test
+python -m scripts.models.evaluate_fusion --model gated --features semantic --split val
+```
+
+Each evaluation saves accuracy/F1 metrics plus confusion matrix artifacts as a raw CSV, raw JSON, and PNG plot.
+
+## Output Structure
+
+Outputs are grouped first by input configuration, then by model when needed:
+
+```text
+results/
+  semantic/
+    late_concat/
+      training/
+        checkpoints/
+        logs/
+      evaluation/
+        metrics.json
+        summary.txt
+        confusion_matrix/
+    logistic_regression/
+      training/
+      evaluation/
+  fused/
+    late_concat/
+      training/
+      evaluation/
+    gated/
+      training/
+      evaluation/
+```
+
+Single feature folders such as `lexical/`, `syntactic/`, `structural/`, and `affective/` follow the same pattern: the feature folder contains one subfolder per trained model, and each model has separate `training/` and `evaluation/` directories.
+
+## Project Structure
+
+```text
+scripts/
+  config.py
+  data/
+  features/
+    semantic/
+    lexical/
+    syntactic/
+    affective/
+    structural/
+  models/
+    fusion/
+    classical/
+    train_fusion.py
+    evaluate_fusion.py
+  evaluation/
+  analysis/
+```

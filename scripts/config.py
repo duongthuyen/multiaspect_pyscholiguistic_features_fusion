@@ -1,6 +1,5 @@
 # scripts/config.py
 
-import logging
 from pathlib import Path
 
 # =============================================================================
@@ -45,8 +44,12 @@ TEST_PATH       = PROCESSED_DIR / "test.csv"
 # =============================================================================
 # RESULTS PATHS
 # =============================================================================
-# results/ holds publication-relevant artifacts: trained models, evaluation
-# outputs, figures, and logs. Anything you'd cite in your paper lives here.
+# results/ holds publication-relevant artifacts. Training and evaluation outputs
+# are grouped by feature configuration, for example:
+#   results/semantic/training/
+#   results/semantic/evaluation/
+#   results/fused/late_concat/training/
+#   results/fused/gated/evaluation/
 
 RESULTS_DIR     = ROOT_DIR / "results"
 MODELS_DIR      = RESULTS_DIR / "models"
@@ -99,10 +102,11 @@ def require_nrc_vad() -> None:
 # MODEL SUB-DIRECTORIES
 # =============================================================================
 
-ROBERTA_MODEL_DIR   = MODELS_DIR / "roberta"
-TOKENIZED_DIR       = ROBERTA_MODEL_DIR / "tokenized"
-FUSION_MODEL_DIR    = MODELS_DIR / "fusion"
-BASELINE_MODEL_DIR  = MODELS_DIR / "baselines"
+ROBERTA_MODEL_DIR     = MODELS_DIR / "roberta"
+TOKENIZED_DIR         = ROBERTA_MODEL_DIR / "tokenized"
+FINETUNED_ROBERTA_DIR = ROBERTA_MODEL_DIR / "finetuned"  # fine-tuned backbone without classification head
+FUSION_MODEL_DIR      = MODELS_DIR / "fusion"
+BASELINE_MODEL_DIR    = MODELS_DIR / "baselines"
 
 
 # =============================================================================
@@ -154,6 +158,8 @@ BATCH_SIZE          = 32        # Number of samples per training step
 LEARNING_RATE       = 2e-5      # Standard fine-tuning LR for transformers
 NUM_EPOCHS          = 2         # Full passes over the training data
 WEIGHT_DECAY        = 0.01      # Regularization to prevent overfitting
+WARMUP_RATIO        = 0.1       # Fraction of total steps used for LR warm-up
+GRAD_CLIP           = 1.0       # Gradient norm clipping threshold
 
 
 # =============================================================================
@@ -220,7 +226,6 @@ TOTAL_FEATURE_DIM = sum(FEATURE_DIMS.values())
 # Selected at runtime via FUSION_TYPE.
 
 FUSION_TYPE = "concat"
-fusion_type = FUSION_TYPE
 
 # Dimension-matched projections used by the concat fusion architecture.
 # Each branch's projection size scales with its native dimensionality so the
@@ -248,20 +253,26 @@ CLASSIFIER_DROPOUT = 0.2
 
 
 # =============================================================================
+# CLASSICAL MODEL SETTINGS
+# =============================================================================
+
+LOGISTIC_REGRESSION_MAX_ITER = 2000
+
+RANDOM_FOREST_N_ESTIMATORS = 500
+RANDOM_FOREST_MAX_DEPTH = None
+
+SVM_C = 1.0
+SVM_KERNEL = "rbf"
+
+XGBOOST_N_ESTIMATORS = 500
+XGBOOST_MAX_DEPTH = 6
+XGBOOST_LEARNING_RATE = 0.05
+
+
+# =============================================================================
 # REPRODUCIBILITY
 # =============================================================================
 
 SEED = 42
 
 
-# =============================================================================
-# LOGGING
-# =============================================================================
-# basicConfig runs at import time. If a calling script has already configured
-# logging, this call is a no-op (basicConfig only configures the root logger
-# if no handler is attached). Call logging.getLogger(__name__) in modules.
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)

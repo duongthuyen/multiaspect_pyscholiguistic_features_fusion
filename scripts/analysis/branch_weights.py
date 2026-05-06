@@ -22,8 +22,8 @@ Usage (from project root):
     python -m scripts.analysis.branch_weights          # runs both
 
 Results are saved to:
-    results/evaluation/branch_weights_{model_type}.json
-    results/evaluation/branch_weights_{model_type}.txt
+    results/fused/{model}/evaluation/branch_weights.json
+    results/fused/{model}/evaluation/branch_weights.txt
 """
 
 import argparse
@@ -39,6 +39,8 @@ from scripts import config
 from scripts.models.fusion.factory import build_fusion_model
 from scripts.models.fusion.feature_loader import load_fusion_feature_tensors
 from scripts.models.train_fusion import load_labels
+from scripts.utils.logging_utils import setup_logging
+from scripts.utils.outputs import checkpoint_dir, evaluation_dir
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +51,13 @@ BRANCHES = ["semantic", "affective", "handcrafted"]
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _load_test_loader(model_type: str, batch_size: int = 256):
-    """Load and scale the test split, return a DataLoader."""
+
+def _load_test_loader(model_type: str, batch_size: int = 256) -> DataLoader:
+    """Load and scale the test split and return a DataLoader that includes labels."""
     semantic, affective, handcrafted, _ = load_fusion_feature_tensors(split="test")
     labels = load_labels("test")
 
-    scaler_path = config.FUSION_MODEL_DIR / f"{model_type}_scaler.joblib"
+    scaler_path = checkpoint_dir("fused", model_type) / "handcrafted_scaler.joblib"
     if not scaler_path.exists():
         raise FileNotFoundError(
             f"Scaler not found: {scaler_path}\n"
@@ -69,7 +72,7 @@ def _load_test_loader(model_type: str, batch_size: int = 256):
 
 
 def _load_model(model_type: str) -> torch.nn.Module:
-    ckpt_path = config.FUSION_MODEL_DIR / f"{model_type}_best.pt"
+    ckpt_path = checkpoint_dir("fused", model_type) / "best.pt"
     if not ckpt_path.exists():
         raise FileNotFoundError(
             f"Checkpoint not found: {ckpt_path}\n"
@@ -85,6 +88,7 @@ def _load_model(model_type: str) -> torch.nn.Module:
 # GatedFusion — extract gate values
 # ---------------------------------------------------------------------------
 
+
 def analyze_gated(batch_size: int = 256) -> dict:
     """
     Average softmax gate weights across the entire test set.
@@ -95,77 +99,63 @@ def analyze_gated(batch_size: int = 256) -> dict:
       dim 2 = hidden dimension
 
     We average over batch and hidden dims to get one scalar per branch.
+    Labels are collected in the same pass to compute per-class gate averages,
+    avoiding a second forward pass over the test set.
     """
-    print("\n" + "=" * 60)
-    print("GatedFusion — gate weight analysis")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("GatedFusion — gate weight analysis")
+    logger.info("=" * 60)
 
-    model  = _load_model("gated")
+    model = _load_model("gated")
     loader = _load_test_loader("gated", batch_size=batch_size)
 
-    all_gates = []   # list of (B, 3, 256) tensors
+    all_gates: list[np.ndarray] = []
+    all_labels: list[np.ndarray] = []
 
     with torch.no_grad():
-        for semantic, affective, handcrafted, _ in loader:
+        for semantic, affective, handcrafted, labels in loader:
             _, gates = model(semantic, affective, handcrafted, return_gates=True)
-            all_gates.append(gates.cpu())
+            all_gates.append(gates.cpu().numpy())
+            all_labels.append(labels.numpy())
 
     # (N, 3, 256)
-    all_gates = torch.cat(all_gates, dim=0).numpy()
+    all_gates_arr = np.concatenate(all_gates, axis=0)
+    all_labels_arr = np.concatenate(all_labels)
 
     # Mean over samples and hidden dimensions → shape (3,)
-    mean_per_branch = all_gates.mean(axis=(0, 2))
+    mean_per_branch = all_gates_arr.mean(axis=(0, 2))
 
-    print(f"\n{'Branch':<14} {'Mean gate':>10}  {'Contribution':>13}")
-    print("-" * 42)
+    logger.info("Overall mean gate (averaged across test set):")
     for name, val in zip(BRANCHES, mean_per_branch):
-        print(f"  {name:<12} {val:>10.4f}  {val*100:>11.1f}%")
-
-    print(f"\n  (gates are softmaxed across branches, so they sum to 1.0)")
-    print(f"  Total: {mean_per_branch.sum():.4f}")
+        logger.info("  %-14s %.4f  (%.1f%%)", name, val, val * 100)
+    logger.info("  Gates are softmaxed across branches; total=%.4f", mean_per_branch.sum())
 
     # Per-class gate breakdown
-    print(f"\n{'Branch':<14}", end="")
-    id_to_class = config.ID_TO_CLASS
-    for cls in id_to_class.values():
-        print(f"  {cls:<10}", end="")
-    print()
-    print("-" * (14 + 12 * len(id_to_class)))
-
-    # Reload with labels for per-class breakdown
-    semantic, affective, handcrafted, _ = load_fusion_feature_tensors(split="test")
-    labels = load_labels("test").numpy()
-    scaler = joblib.load(config.FUSION_MODEL_DIR / "gated_scaler.joblib")
-    hc_scaled = torch.from_numpy(scaler.transform(handcrafted.numpy()).astype(np.float32))
-
-    all_gates_arr = []
-    all_labels    = []
-    ds = TensorDataset(semantic, affective, hc_scaled, torch.from_numpy(labels))
-    loader2 = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
-    with torch.no_grad():
-        for sem, aff, hc, lbl in loader2:
-            _, gates = model(sem, aff, hc, return_gates=True)
-            all_gates_arr.append(gates.cpu().numpy())
-            all_labels.append(lbl.numpy())
-
-    all_gates_arr = np.concatenate(all_gates_arr, axis=0)   # (N, 3, 256)
-    all_labels    = np.concatenate(all_labels)               # (N,)
-
-    per_class = {}
+    per_class: dict[str, dict[str, float]] = {}
     for branch_idx, branch_name in enumerate(BRANCHES):
-        print(f"  {branch_name:<12}", end="")
         per_class[branch_name] = {}
-        for cls_id, cls_name in id_to_class.items():
-            mask = all_labels == cls_id
-            if mask.sum() == 0:
-                val = float("nan")
-            else:
-                val = float(all_gates_arr[mask, branch_idx, :].mean())
+        for cls_id, cls_name in config.ID_TO_CLASS.items():
+            mask = all_labels_arr == cls_id
+            val = (
+                float(all_gates_arr[mask, branch_idx, :].mean())
+                if mask.sum() > 0
+                else float("nan")
+            )
             per_class[branch_name][cls_name] = round(val, 6)
-            print(f"  {val:.4f}    ", end="")
-        print()
 
-    result = {
+    logger.info("Per-class mean gates:")
+    header = f"  {'Branch':<14}" + "".join(
+        f"  {cls:<10}" for cls in config.ID_TO_CLASS.values()
+    )
+    logger.info(header)
+    for branch_name in BRANCHES:
+        row = f"  {branch_name:<14}" + "".join(
+            f"  {per_class[branch_name][cls]:.4f}    "
+            for cls in config.ID_TO_CLASS.values()
+        )
+        logger.info(row)
+
+    return {
         "model_type": "gated",
         "overall": {
             name: round(float(val), 6)
@@ -173,12 +163,12 @@ def analyze_gated(batch_size: int = 256) -> dict:
         },
         "per_class": per_class,
     }
-    return result
 
 
 # ---------------------------------------------------------------------------
 # LateConcatFusion — weight-based branch importance
 # ---------------------------------------------------------------------------
+
 
 def analyze_concat() -> dict:
     """
@@ -193,22 +183,22 @@ def analyze_concat() -> dict:
 
     Mean absolute weight per branch, then normalised to sum to 1.0.
     """
-    print("\n" + "=" * 60)
-    print("LateConcatFusion — classifier weight-based branch importance")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("LateConcatFusion — classifier weight-based branch importance")
+    logger.info("=" * 60)
 
     model = _load_model("concat")
 
     # classifier.layers[0] is the first nn.Linear inside ClassifierHead
     W = model.classifier.layers[0].weight.detach().numpy()  # (256, 448)
 
-    s_end = config.SEMANTIC_PROJECTION_DIM                              # 256
-    a_end = s_end + config.AFFECTIVE_PROJECTION_DIM                    # 384
-    h_end = a_end + config.HANDCRAFTED_PROJECTION_DIM                  # 448
+    s_end = config.SEMANTIC_PROJECTION_DIM                    # 256
+    a_end = s_end + config.AFFECTIVE_PROJECTION_DIM           # 384
+    h_end = a_end + config.HANDCRAFTED_PROJECTION_DIM         # 448
 
     slices = {
-        "semantic":    W[:, :s_end],
-        "affective":   W[:, s_end:a_end],
+        "semantic": W[:, :s_end],
+        "affective": W[:, s_end:a_end],
         "handcrafted": W[:, a_end:h_end],
     }
 
@@ -216,40 +206,42 @@ def analyze_concat() -> dict:
     total = sum(raw.values())
     normalised = {name: round(val / total, 6) for name, val in raw.items()}
 
-    print(f"\n{'Branch':<14} {'Mean |w|':>10}  {'Normalised':>11}  {'Note'}")
-    print("-" * 58)
-    dims = {"semantic": s_end, "affective": config.AFFECTIVE_PROJECTION_DIM,
-            "handcrafted": config.HANDCRAFTED_PROJECTION_DIM}
+    dims = {
+        "semantic": s_end,
+        "affective": config.AFFECTIVE_PROJECTION_DIM,
+        "handcrafted": config.HANDCRAFTED_PROJECTION_DIM,
+    }
+    logger.info("Normalised branch importance (from classifier head weights):")
     for name in BRANCHES:
-        print(f"  {name:<12} {raw[name]:>10.5f}  {normalised[name]:>10.4f}   "
-              f"({dims[name]} projection dims)")
+        logger.info(
+            "  %-14s mean|w|=%.5f  normalised=%.4f  (%d projection dims)",
+            name, raw[name], normalised[name], dims[name],
+        )
+    logger.info("  (approximation — LateConcatFusion has no explicit gate)")
 
-    print("\n  Note: LateConcatFusion has no explicit gate. This is an")
-    print("  approximation based on the classifier head's weight magnitudes.")
-
-    result = {
-        "model_type":  "concat",
-        "method":      "mean_abs_weight_of_classifier_head_layer0",
+    return {
+        "model_type": "concat",
+        "method": "mean_abs_weight_of_classifier_head_layer0",
         "raw_mean_abs_weight": raw,
-        "normalised":  normalised,
+        "normalised": normalised,
         "projection_dims": dims,
     }
-    return result
 
 
 # ---------------------------------------------------------------------------
 # Save results
 # ---------------------------------------------------------------------------
 
+
 def save_results(result: dict, model_type: str) -> None:
-    eval_dir = config.EVAL_DIR
+    eval_dir = evaluation_dir("fused", model_type)
     eval_dir.mkdir(parents=True, exist_ok=True)
 
-    json_path = eval_dir / f"branch_weights_{model_type}.json"
+    json_path = eval_dir / "branch_weights.json"
     with open(json_path, "w") as f:
         json.dump(result, f, indent=2)
 
-    txt_path = eval_dir / f"branch_weights_{model_type}.txt"
+    txt_path = eval_dir / "branch_weights.txt"
     lines = [f"Branch importance — {model_type.upper()}", "=" * 50]
 
     if model_type == "gated":
@@ -274,8 +266,8 @@ def save_results(result: dict, model_type: str) -> None:
         lines.append("\n(approximation — no explicit gate in LateConcatFusion)")
 
     txt_path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"\nSaved → {json_path}")
-    print(f"Saved → {txt_path}")
+    logger.info("Saved -> %s", json_path)
+    logger.info("Saved -> %s", txt_path)
 
 
 # ---------------------------------------------------------------------------
@@ -283,13 +275,16 @@ def save_results(result: dict, model_type: str) -> None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+    setup_logging()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", choices=["concat", "gated"], action="append",
-                        dest="models",
-                        help="Which model to analyse. Can be passed twice. "
-                             "Defaults to both if omitted.")
+    parser.add_argument(
+        "--model",
+        choices=["concat", "gated"],
+        action="append",
+        dest="models",
+        help="Which model to analyse. Can be passed twice. Defaults to both if omitted.",
+    )
     args = parser.parse_args()
     models_to_run = args.models or ["concat", "gated"]
 
@@ -300,5 +295,5 @@ if __name__ == "__main__":
             else:
                 result = analyze_concat()
             save_results(result, model_type)
-        except FileNotFoundError as e:
-            print(f"\n[SKIP] {model_type}: {e}")
+        except FileNotFoundError as exc:
+            logger.warning("SKIP %s: %s", model_type, exc)

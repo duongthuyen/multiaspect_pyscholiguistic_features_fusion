@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +8,8 @@ import pandas as pd
 import torch
 
 from scripts import config
+
+logger = logging.getLogger(__name__)
 
 GROUP_SUBFEATURES = {
     "semantic": ["mental_roberta"],
@@ -23,6 +26,9 @@ GROUP_DIRS = {
     "structural": config.STRUCTURAL_FEATURES_DIR,
     "affective": config.AFFECTIVE_FEATURES_DIR,
 }
+
+HANDCRAFTED_GROUPS = ["lexical", "syntactic", "structural"]
+INPUT_CONFIGS = list(config.FEATURE_GROUPS) + ["fused"]
 
 
 def _features_to_matrix(series: pd.Series) -> np.ndarray:
@@ -54,6 +60,7 @@ def load_subextractor_features(
     path = _subextractor_feature_path(group, sub_name, split=split)
     if not path.exists():
         raise FileNotFoundError(f"Missing feature parquet: {path}")
+    logger.debug("Loading %s.%s from %s", group, sub_name, path)
     df = pd.read_parquet(path)
     if "post_id" not in df.columns or "features" not in df.columns:
         raise ValueError(f"{path} must contain columns: post_id, features")
@@ -64,8 +71,8 @@ def _normalize_post_ids(post_ids: list[str]) -> list[str]:
     """Normalize post_ids to remove prefixes like 'train_', 'val_', etc."""
     normalized = []
     for pid in post_ids:
-        if '_' in pid:
-            parts = pid.split('_')
+        if "_" in pid:
+            parts = pid.split("_")
             if len(parts) >= 2 and parts[-1].isdigit():
                 normalized.append(parts[-1])
             else:
@@ -87,7 +94,9 @@ def load_group_features(group: str, split: str | None = None) -> tuple[list, np.
         if reference_ids is None:
             reference_ids = normalized_ids
         elif normalized_ids != reference_ids:
-            raise AssertionError(f"post_id order mismatch in {group}.{sub_name} after normalization")
+            raise AssertionError(
+                f"post_id order mismatch in {group}.{sub_name} after normalization"
+            )
         matrices.append(matrix)
 
     return reference_ids or [], np.concatenate(matrices, axis=1).astype(np.float32)
@@ -96,6 +105,7 @@ def load_group_features(group: str, split: str | None = None) -> tuple[list, np.
 def load_fusion_feature_tensors(
     split: str | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list]:
+    logger.info("Loading fusion features (split=%s)...", split or "all")
     semantic_ids, semantic = load_group_features("semantic", split=split)
     affective_ids, affective = load_group_features("affective", split=split)
 
@@ -110,7 +120,9 @@ def load_fusion_feature_tensors(
         handcrafted_parts.append(matrix)
 
     if semantic_ids != affective_ids or semantic_ids != handcrafted_ids:
-        raise AssertionError("post_id order mismatch across semantic, affective, and handcrafted inputs")
+        raise AssertionError(
+            "post_id order mismatch across semantic, affective, and handcrafted inputs"
+        )
 
     handcrafted = np.concatenate(handcrafted_parts, axis=1).astype(np.float32)
     if semantic.shape[1] != config.SEMANTIC_DIM:
@@ -120,9 +132,84 @@ def load_fusion_feature_tensors(
     if handcrafted.shape[1] != config.HANDCRAFTED_DIM:
         raise ValueError(f"handcrafted dim {handcrafted.shape[1]} != {config.HANDCRAFTED_DIM}")
 
+    logger.info(
+        "Fusion features loaded  n=%d  semantic=%s  affective=%s  handcrafted=%s",
+        len(semantic_ids), semantic.shape, affective.shape, handcrafted.shape,
+    )
     return (
         torch.from_numpy(semantic),
         torch.from_numpy(affective),
         torch.from_numpy(handcrafted),
         semantic_ids,
     )
+
+
+def load_feature_tensors(
+    input_config: str = "fused",
+    split: str | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list]:
+    """
+    Return three tensors compatible with the fusion model signature.
+
+    Fused mode loads all feature groups. Single-group mode places the selected
+    group in its natural branch and zero-fills unused branches so
+    LateConcatFusion and GatedFusion signatures remain unchanged.
+    """
+    selected = input_config.lower()
+    if selected == "fused":
+        return load_fusion_feature_tensors(split=split)
+    if selected not in config.FEATURE_GROUPS:
+        raise ValueError(f"input_config must be one of {INPUT_CONFIGS}")
+
+    logger.info("Loading single-group features: %s (split=%s)...", selected, split or "all")
+    ids, matrix = load_group_features(selected, split=split)
+    n_rows = matrix.shape[0]
+    semantic = np.zeros((n_rows, config.SEMANTIC_DIM), dtype=np.float32)
+    affective = np.zeros((n_rows, config.AFFECTIVE_DIM), dtype=np.float32)
+    handcrafted = np.zeros((n_rows, config.HANDCRAFTED_DIM), dtype=np.float32)
+
+    if selected == "semantic":
+        semantic = matrix
+    elif selected == "affective":
+        affective = matrix
+    else:
+        offsets = {
+            "lexical": 0,
+            "syntactic": config.LEXICAL_DIM,
+            "structural": config.LEXICAL_DIM + config.SYNTACTIC_DIM,
+        }
+        start = offsets[selected]
+        end = start + config.FEATURE_DIMS[selected]
+        handcrafted[:, start:end] = matrix
+
+    return (
+        torch.from_numpy(semantic),
+        torch.from_numpy(affective),
+        torch.from_numpy(handcrafted),
+        ids,
+    )
+
+
+def load_flat_feature_matrix(
+    input_config: str = "fused",
+    split: str | None = None,
+) -> tuple[list, np.ndarray]:
+    """Return a 2D feature matrix for classical classifiers."""
+    selected = input_config.lower()
+    if selected not in INPUT_CONFIGS:
+        raise ValueError(f"input_config must be one of {INPUT_CONFIGS}")
+    if selected != "fused":
+        return load_group_features(selected, split=split)
+
+    logger.info("Loading flat fused feature matrix (split=%s)...", split or "all")
+    reference_ids = None
+    matrices = []
+    for group in config.FEATURE_GROUPS:
+        ids, matrix = load_group_features(group, split=split)
+        if reference_ids is None:
+            reference_ids = ids
+        elif ids != reference_ids:
+            raise AssertionError(f"post_id order mismatch in fused group {group}")
+        matrices.append(matrix)
+
+    return reference_ids or [], np.concatenate(matrices, axis=1).astype(np.float32)

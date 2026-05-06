@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import pandas as pd
 
 from scripts import config
 from scripts.features.orchestrator import FeatureOrchestrator
+from scripts.utils.logging_utils import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -30,14 +34,21 @@ def main() -> None:
     parser.add_argument("--force", action="store_true", help="Overwrite existing parquet files.")
     args = parser.parse_args()
 
+    split_name = args.split or Path(args.input).stem
+    log_file = config.FEATURES_DIR / split_name / "extract.log"
+    setup_logging(log_file=log_file)
+
+    logger.info("Loading input CSV: %s", args.input)
     df = pd.read_csv(args.input)
     if args.post_id_col not in df.columns:
         df = df.copy()
-        split_name = args.split or Path(args.input).stem
         df[args.post_id_col] = [f"{split_name}_{i}" for i in range(len(df))]
-    else:
-        split_name = args.split or Path(args.input).stem
+        logger.info("Generated post_ids with prefix '%s_'", split_name)
 
+    logger.info(
+        "Extracting features  split=%s  components=%s  rows=%d",
+        split_name, args.components or "all", len(df),
+    )
     FeatureOrchestrator().extract_dataset(
         df,
         text_col=args.text_col,
@@ -46,6 +57,7 @@ def main() -> None:
         force=args.force,
         split=split_name,
     )
+    logger.info("Feature extraction complete")
 
 
 if __name__ == "__main__":

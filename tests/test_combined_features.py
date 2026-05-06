@@ -1,139 +1,212 @@
 """
-Test script for combined features.
-Demonstrates how to load and use combined feature files for model testing.
+Tests for scripts/utils/combined_features_info.py.
+
+All I/O is isolated to temporary directories; no shared state is modified.
+Config paths are temporarily replaced and always restored in tearDown.
 """
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from scripts.utils.combined_features_info import load_combined_features, load_all_combined_tensors
-from scripts import config
+
+import scripts.config as cfg
+import scripts.utils.combined_features_info as mod
+from scripts.utils.combined_features_info import (
+    export_combined_summary,
+    get_combined_info,
+    load_all_combined_tensors,
+    load_combined_features,
+    validate_combined_consistency,
+)
+
+_ORIG_FEATURES_DIR = cfg.FEATURES_DIR
+_ORIG_GROUPS = list(mod.GROUPS)
+_ORIG_SPLITS = list(mod.SPLITS)
 
 
-def test_load_single_group():
-    """Test loading combined features for a single group."""
-    print("\n" + "="*80)
-    print("TEST 1: Load Single Group Combined Features")
-    print("="*80)
-    
-    df = load_combined_features("semantic", "train")
-    print(f"Semantic Train Combined:")
-    print(f"  Shape: {len(df)} samples × {len(df['features'].iloc[0])} dimensions")
-    print(f"  Columns: {df.columns.tolist()}")
-    print(f"  First 3 post_ids: {df['post_id'].tolist()[:3]}")
-    print(f"  First sample features shape: {np.array(df['features'].iloc[0]).shape}")
+def _write_parquet(base: Path, group: str, split: str, n_rows: int = 4, dim: int = 8) -> None:
+    out_dir = base / group / split
+    out_dir.mkdir(parents=True, exist_ok=True)
+    post_ids = [f"{split}_{i}" for i in range(n_rows)]
+    features = [np.ones(dim, dtype=float).tolist() for _ in range(n_rows)]
+    pd.DataFrame({"post_id": post_ids, "features": features}).to_parquet(
+        out_dir / "combined.parquet", index=False
+    )
 
 
-def test_load_all_groups():
-    """Test loading all combined features for a split."""
-    print("\n" + "="*80)
-    print("TEST 2: Load All Groups for a Split")
-    print("="*80)
-    
-    tensors = load_all_combined_tensors("train")
-    print(f"\nLoaded {len(tensors)} groups for train split:")
-    for group, data in tensors.items():
-        print(f"  {group:12} shape: {data['shape']}")
+class LoadCombinedFeaturesTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._base = Path(self._tmp.name)
+        _write_parquet(self._base, "semantic", "train", n_rows=5, dim=768)
+        cfg.FEATURES_DIR = self._base
+
+    def tearDown(self):
+        cfg.FEATURES_DIR = _ORIG_FEATURES_DIR
+        self._tmp.cleanup()
+
+    def test_returns_dataframe_with_expected_columns(self):
+        df = load_combined_features("semantic", "train")
+        self.assertIn("post_id", df.columns)
+        self.assertIn("features", df.columns)
+
+    def test_correct_row_count(self):
+        df = load_combined_features("semantic", "train")
+        self.assertEqual(len(df), 5)
+
+    def test_feature_dimension(self):
+        df = load_combined_features("semantic", "train")
+        self.assertEqual(len(df["features"].iloc[0]), 768)
+
+    def test_post_ids_are_strings(self):
+        df = load_combined_features("semantic", "train")
+        self.assertTrue(all(isinstance(pid, str) for pid in df["post_id"]))
+
+    def test_missing_file_raises_file_not_found(self):
+        with self.assertRaises(FileNotFoundError):
+            load_combined_features("lexical", "train")
 
 
-def test_concatenate_features():
-    """Test concatenating all features into a single matrix."""
-    print("\n" + "="*80)
-    print("TEST 3: Concatenate All Features into Single Matrix")
-    print("="*80)
-    
-    tensors = load_all_combined_tensors("train")
-    
-    # Concatenate all feature groups
-    matrices = [data["features"] for data in tensors.values()]
-    combined_matrix = np.concatenate(matrices, axis=1)
-    
-    print(f"\nConcatenated shape: {combined_matrix.shape}")
-    print(f"  Rows: {combined_matrix.shape[0]} (samples)")
-    print(f"  Cols: {combined_matrix.shape[1]} (total features)")
-    
-    # Feature breakdown
-    print("\nFeature breakdown:")
-    col = 0
-    for group, data in tensors.items():
-        dims = data["features"].shape[1]
-        print(f"  {group:12} cols {col:4}-{col+dims-1:4} ({dims:3} dims)")
-        col += dims
+class GetCombinedInfoTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._base = Path(self._tmp.name)
+        _write_parquet(self._base, "semantic", "val", n_rows=3, dim=768)
+        _write_parquet(self._base, "lexical", "val", n_rows=3, dim=11)
+        cfg.FEATURES_DIR = self._base
+
+    def tearDown(self):
+        cfg.FEATURES_DIR = _ORIG_FEATURES_DIR
+        self._tmp.cleanup()
+
+    def test_success_contains_rows_and_dim(self):
+        info = get_combined_info("semantic", "val")
+        self.assertNotIn("error", info)
+        self.assertEqual(info["rows"], 3)
+        self.assertEqual(info["feature_dim"], 768)
+
+    def test_success_sample_post_ids_present(self):
+        info = get_combined_info("lexical", "val")
+        self.assertIn("sample_post_ids", info)
+        self.assertLessEqual(len(info["sample_post_ids"]), 3)
+
+    def test_missing_group_returns_error_key(self):
+        info = get_combined_info("nonexistent", "val")
+        self.assertIn("error", info)
+        self.assertNotIn("rows", info)
 
 
-def test_post_id_alignment():
-    """Test that post_ids are aligned across all groups."""
-    print("\n" + "="*80)
-    print("TEST 4: Verify Post_ID Alignment")
-    print("="*80)
-    
-    for split in ["train", "val", "test"]:
-        print(f"\nSplit: {split}")
-        tensors = load_all_combined_tensors(split)
-        
-        reference_ids = None
-        aligned = True
-        for group, data in tensors.items():
-            post_ids = data["post_ids"]
-            if reference_ids is None:
-                reference_ids = post_ids
-            elif post_ids != reference_ids:
-                print(f"  ❌ {group} post_ids misaligned!")
-                aligned = False
-        
-        if aligned:
-            print(f"  ✅ All groups aligned ({len(reference_ids)} samples)")
+class LoadAllCombinedTensorsTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._base = Path(self._tmp.name)
+        _write_parquet(self._base, "semantic", "train", n_rows=4, dim=8)
+        _write_parquet(self._base, "lexical", "train", n_rows=4, dim=3)
+        cfg.FEATURES_DIR = self._base
+        mod.GROUPS = ["semantic", "lexical"]
+        mod.SPLITS = ["train"]
+
+    def tearDown(self):
+        cfg.FEATURES_DIR = _ORIG_FEATURES_DIR
+        mod.GROUPS = _ORIG_GROUPS
+        mod.SPLITS = _ORIG_SPLITS
+        self._tmp.cleanup()
+
+    def test_present_groups_loaded_as_float32_arrays(self):
+        tensors = load_all_combined_tensors("train")
+        self.assertIn("semantic", tensors)
+        self.assertIn("lexical", tensors)
+        self.assertIsInstance(tensors["semantic"]["features"], np.ndarray)
+        self.assertEqual(tensors["semantic"]["features"].dtype, np.float32)
+
+    def test_shapes_match_written_data(self):
+        tensors = load_all_combined_tensors("train")
+        self.assertEqual(tensors["semantic"]["features"].shape, (4, 8))
+        self.assertEqual(tensors["lexical"]["features"].shape, (4, 3))
+
+    def test_post_ids_are_lists(self):
+        tensors = load_all_combined_tensors("train")
+        self.assertIsInstance(tensors["semantic"]["post_ids"], list)
+
+    def test_missing_group_is_absent_from_result(self):
+        mod.GROUPS = ["semantic", "missing_group"]
+        tensors = load_all_combined_tensors("train")
+        self.assertIn("semantic", tensors)
+        self.assertNotIn("missing_group", tensors)
 
 
-def test_data_types():
-    """Test data types and ranges."""
-    print("\n" + "="*80)
-    print("TEST 5: Data Type and Value Analysis")
-    print("="*80)
-    
-    tensors = load_all_combined_tensors("train")
-    for group, data in tensors.items():
-        features = data["features"]
-        print(f"\n{group}:")
-        print(f"  dtype: {features.dtype}")
-        print(f"  min: {features.min():.6f}, max: {features.max():.6f}")
-        print(f"  mean: {features.mean():.6f}, std: {features.std():.6f}")
-        print(f"  NaN count: {np.isnan(features).sum()}")
+class ValidateCombinedConsistencyTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._base = Path(self._tmp.name)
+        cfg.FEATURES_DIR = self._base
+        mod.SPLITS = ["train"]
+
+    def tearDown(self):
+        cfg.FEATURES_DIR = _ORIG_FEATURES_DIR
+        mod.GROUPS = _ORIG_GROUPS
+        mod.SPLITS = _ORIG_SPLITS
+        self._tmp.cleanup()
+
+    def test_consistent_post_ids_returns_true(self):
+        _write_parquet(self._base, "semantic", "train", n_rows=3, dim=4)
+        _write_parquet(self._base, "lexical", "train", n_rows=3, dim=4)
+        mod.GROUPS = ["semantic", "lexical"]
+        self.assertTrue(validate_combined_consistency())
+
+    def test_different_row_counts_returns_false(self):
+        _write_parquet(self._base, "semantic", "train", n_rows=3, dim=4)
+        _write_parquet(self._base, "lexical", "train", n_rows=5, dim=4)
+        mod.GROUPS = ["semantic", "lexical"]
+        self.assertFalse(validate_combined_consistency())
+
+    def test_missing_group_file_returns_false(self):
+        _write_parquet(self._base, "semantic", "train", n_rows=3, dim=4)
+        mod.GROUPS = ["semantic", "nonexistent"]
+        self.assertFalse(validate_combined_consistency())
+
+    def test_single_group_trivially_consistent(self):
+        _write_parquet(self._base, "semantic", "train", n_rows=3, dim=4)
+        mod.GROUPS = ["semantic"]
+        self.assertTrue(validate_combined_consistency())
 
 
-def test_save_numpy():
-    """Test saving combined features as numpy arrays."""
-    print("\n" + "="*80)
-    print("TEST 6: Save Combined Features as NumPy Arrays")
-    print("="*80)
-    
-    output_dir = config.FEATURES_DIR / "numpy_export"
-    output_dir.mkdir(exist_ok=True)
-    
-    for split in ["train", "val", "test"]:
-        print(f"\nSaving {split}...")
-        tensors = load_all_combined_tensors(split)
-        
-        for group, data in tensors.items():
-            features_file = output_dir / f"{split}_{group}_features.npy"
-            post_ids_file = output_dir / f"{split}_{group}_post_ids.txt"
-            
-            np.save(features_file, data["features"])
-            with open(post_ids_file, 'w') as f:
-                f.write('\n'.join(data["post_ids"]))
-            
-            print(f"  ✓ {features_file.name} ({data['shape']})")
-    
-    print(f"\nExported to: {output_dir}")
+class ExportCombinedSummaryTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._base = Path(self._tmp.name)
+        _write_parquet(self._base, "semantic", "train", n_rows=2, dim=4)
+        cfg.FEATURES_DIR = self._base
+        mod.GROUPS = ["semantic"]
+        mod.SPLITS = ["train"]
+
+    def tearDown(self):
+        cfg.FEATURES_DIR = _ORIG_FEATURES_DIR
+        mod.GROUPS = _ORIG_GROUPS
+        mod.SPLITS = _ORIG_SPLITS
+        self._tmp.cleanup()
+
+    def test_creates_json_file(self):
+        export_combined_summary()
+        self.assertTrue((self._base / "combined_summary.json").exists())
+
+    def test_json_has_expected_structure(self):
+        export_combined_summary()
+        with open(self._base / "combined_summary.json") as f:
+            data = json.load(f)
+        self.assertIn("train", data)
+        self.assertIn("semantic", data["train"])
+        self.assertEqual(data["train"]["semantic"]["rows"], 2)
+
+    def test_returns_summary_dict(self):
+        summary = export_combined_summary()
+        self.assertIsInstance(summary, dict)
+        self.assertIn("train", summary)
 
 
 if __name__ == "__main__":
-    test_load_single_group()
-    test_load_all_groups()
-    test_concatenate_features()
-    test_post_id_alignment()
-    test_data_types()
-    test_save_numpy()
-    
-    print("\n" + "="*80)
-    print("✅ ALL TESTS PASSED")
-    print("="*80)
+    unittest.main()
