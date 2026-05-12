@@ -14,6 +14,7 @@ from scripts import config
 from scripts.evaluation.metrics import save_confusion_matrix_artifacts
 from scripts.models.fusion.feature_loader import INPUT_CONFIGS, load_flat_feature_matrix
 from scripts.models.train_fusion import load_labels
+from scripts.utils.logging_utils import setup_logging
 from scripts.utils.outputs import checkpoint_dir, evaluation_dir, log_dir
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,10 @@ def save_metrics(result: dict, input_config: str, model_name: str, split: str) -
 
 
 def train_classifier(estimator, model_name: str, input_config: str = "fused") -> dict:
+    logs_root = log_dir(input_config, model_name)
+    logs_root.mkdir(parents=True, exist_ok=True)
+    setup_logging(log_file=logs_root / "train.log")
+
     logger.info("Training %s  features=%s", model_name, input_config)
 
     x_train, y_train = load_xy(input_config, "train")

@@ -1,5 +1,10 @@
 # ── Deep learning ─────────────────────────────────────────────────────────────
-torch>=2.1.0
+# GPU (CUDA) install — pip resolves the CUDA-enabled wheel via the extra index.
+# For CUDA 13.1 (your version): if the cu124 wheel below fails, visit
+# https://pytorch.org/get-started/locally/ and copy the exact pip command for
+# your CUDA version, then replace the --extra-index-url line accordingly.
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch>=2.4.0
 transformers>=4.40.0
 datasets>=2.18.0          # tokenized dataset caching (roberta_embed.py)
 evaluate>=0.4.0           # accuracy / f1 metrics (roberta_embed.py)

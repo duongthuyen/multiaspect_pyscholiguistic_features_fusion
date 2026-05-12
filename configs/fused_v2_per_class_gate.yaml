@@ -1,0 +1,36 @@
+# Variant D — per_class_gate
+#
+# Six class-specific gate heads (one per disorder) implemented as a shared-
+# trunk MLP with a wide output (hidden → 6×3), reshaped to (B, 6, 3) and
+# softmax'd per class.  An auxiliary classifier on the raw semantic CLS
+# token produces soft class probabilities p₀…p₅; the 6 per-class fused
+# representations are mixed by those probabilities:
+#
+#   fused_c = Σ_n(gate_c[n] × branch_proj_n)   per-class fused repr
+#   fused   = Σ_c(p_c × fused_c)               soft class mixture
+#
+# This directly addresses the diagnostic: the learnable 6×3 gate table
+# has independent parameters for PTSD (→ high handcrafted) and Anxiety
+# (→ high affective) without the single-gate compromise.
+#
+# Total loss = main_CE + aux_weight × aux_CE
+#
+# Usage:
+#   python -m scripts.models.train_fused_v2 --config configs/fused_v2_per_class_gate.yaml
+
+model: per_class_gate
+input_config: fused
+
+projection_dim: 256
+gate_hidden_dim: 128
+handcrafted_dropout: 0.4
+
+aux_weight: 0.3
+
+epochs: 20
+lr: 5.0e-4
+batch_size: 32
+seed: 42
+label_smoothing: 0.1
+gate_weight_decay: 1.0e-4
+early_stopping_patience: 2

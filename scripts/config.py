@@ -270,6 +270,24 @@ XGBOOST_LEARNING_RATE = 0.05
 
 
 # =============================================================================
+# END-TO-END FUSION MODEL SETTINGS
+# =============================================================================
+# Trains RoBERTa backbone + fusion layers jointly in one pass.
+# Two optimizer parameter groups with different LRs prevent the pre-trained
+# backbone from being overwhelmed by randomly-initialised fusion gradients.
+
+E2E_MODEL_DIR       = MODELS_DIR / "e2e"
+E2E_BACKBONE_LR     = 2e-5   # same as original RoBERTa fine-tuning LR
+E2E_FUSION_LR       = 1e-4   # 5× larger — fusion layers train from scratch
+E2E_EPOCHS          = 5
+E2E_BATCH_SIZE      = 16     # fits T4 (15 GB) at max_length=512
+E2E_WEIGHT_DECAY    = 0.01
+E2E_WARMUP_RATIO    = 0.1
+E2E_GRAD_CLIP       = 1.0
+E2E_DROPOUT         = 0.1
+
+
+# =============================================================================
 # REPRODUCIBILITY
 # =============================================================================
 

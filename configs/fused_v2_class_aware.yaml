@@ -1,0 +1,32 @@
+# Variant B — class_aware  (highest priority fix)
+#
+# Builds on content_gate and adds an auxiliary classifier head
+# (Linear(768, 6)) applied to the raw semantic CLS token.  The resulting
+# soft class probabilities are appended to the gate input (828 + 6 = 834
+# dims) so the gate MLP can learn class-conditional routing:
+#   predicted PTSD   → up-weight handcrafted (past_ratio)
+#   predicted Anxiety → up-weight affective  (nervousness)
+#
+# Total loss = main_CE + aux_weight × aux_CE
+#
+# Usage:
+#   python -m scripts.models.train_fused_v2 --config configs/fused_v2_class_aware.yaml
+
+model: class_aware
+input_config: fused
+
+projection_dim: 256
+gate_hidden_dim: 128
+handcrafted_dropout: 0.4
+
+# Weight on auxiliary CE loss from the semantic branch classifier head.
+# 0.3 is a reasonable starting point; lower if main task degrades.
+aux_weight: 0.3
+
+epochs: 20
+lr: 5.0e-4
+batch_size: 32
+seed: 42
+label_smoothing: 0.1
+gate_weight_decay: 1.0e-4
+early_stopping_patience: 2

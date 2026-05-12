@@ -1,0 +1,29 @@
+# Variant A — content_gate
+#
+# Baseline cross-branch fix: gate MLP sees raw concatenated features
+# (semantic 768 + affective 34 + handcrafted 26 = 828 dims) and outputs
+# 3 scalar branch weights per sample.  The original gate computed a
+# 256-dim sigmoid over each branch's own projection — it could only learn
+# a fixed average usefulness per branch.
+#
+# Usage:
+#   python -m scripts.models.train_fused_v2 --config configs/fused_v2_content_gate.yaml
+
+model: content_gate
+input_config: fused
+
+# Branch projection dimension.
+projection_dim: 256
+# Gate MLP hidden layer size (Linear → ReLU → Dropout(0.3) → Linear(3)).
+gate_hidden_dim: 128
+# Higher dropout on the small 26-dim handcrafted branch prevents memorisation.
+handcrafted_dropout: 0.4
+
+# Training.
+epochs: 20
+lr: 5.0e-4
+batch_size: 32
+seed: 42
+label_smoothing: 0.1
+gate_weight_decay: 1.0e-4
+early_stopping_patience: 2

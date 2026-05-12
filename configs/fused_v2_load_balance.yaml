@@ -1,0 +1,40 @@
+# Variant C — load_balance
+#
+# Builds on class_aware and adds a Shazeer-2017-style load-balance loss
+# that penalises any branch from being systematically under-used across a
+# batch:
+#
+#   importance = gate_weights.sum(dim=0)        # total weight per branch
+#   lb_loss    = CV(importance)²                # coefficient of variation²
+#
+# High CV means branches are used very unequally across the batch; the loss
+# drives the model to spread gate weight across branches for different samples
+# (not to make each sample's gate uniform, which is what we want to avoid).
+#
+# Total loss = main_CE + aux_weight × aux_CE + lb_weight × lb_loss
+#
+# Tuning lb_weight:
+#   0.001  very gentle nudge
+#   0.01   recommended starting point (default)
+#   0.1    aggressive; watch for val acc degradation
+#
+# Usage:
+#   python -m scripts.models.train_fused_v2 --config configs/fused_v2_load_balance.yaml
+
+model: load_balance
+input_config: fused
+
+projection_dim: 256
+gate_hidden_dim: 128
+handcrafted_dropout: 0.4
+
+aux_weight: 0.3
+lb_weight: 0.01
+
+epochs: 20
+lr: 5.0e-4
+batch_size: 32
+seed: 42
+label_smoothing: 0.1
+gate_weight_decay: 1.0e-4
+early_stopping_patience: 2

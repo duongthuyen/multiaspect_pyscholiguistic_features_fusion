@@ -40,6 +40,12 @@ def _subextractor_feature_path(group: str, sub_name: str, split: str | None = No
     if split:
         base_dir = base_dir / split
 
+    # Fine-tuned CLS embeddings from Colab take priority over the pre-extracted file.
+    if sub_name == "mental_roberta":
+        cls_candidate = base_dir / "cls_embeddings.parquet"
+        if cls_candidate.exists():
+            return cls_candidate
+
     candidate = base_dir / f"{sub_name}.parquet"
     if candidate.exists():
         return candidate
@@ -52,6 +58,13 @@ def _subextractor_feature_path(group: str, sub_name: str, split: str | None = No
     return candidate
 
 
+def _load_wide_format(df: pd.DataFrame) -> tuple[list, np.ndarray]:
+    """Handle cls_embeddings.parquet: 768 numeric columns, no post_id/features columns."""
+    matrix = df.values.astype(np.float32)
+    post_ids = [str(i) for i in range(len(df))]
+    return post_ids, matrix
+
+
 def load_subextractor_features(
     group: str,
     sub_name: str,
@@ -62,6 +75,11 @@ def load_subextractor_features(
         raise FileNotFoundError(f"Missing feature parquet: {path}")
     logger.debug("Loading %s.%s from %s", group, sub_name, path)
     df = pd.read_parquet(path)
+
+    # Wide format: numeric column names, no post_id/features (produced by Colab extraction).
+    if "post_id" not in df.columns and "features" not in df.columns:
+        return _load_wide_format(df)
+
     if "post_id" not in df.columns or "features" not in df.columns:
         raise ValueError(f"{path} must contain columns: post_id, features")
     return df["post_id"].tolist(), _features_to_matrix(df["features"])
