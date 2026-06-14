@@ -1,16 +1,11 @@
-"""
-Evaluate trained fusion models from the feature-aware output structure.
-
-Usage:
-    python -m scripts.models.evaluate_fusion --model concat --features fused
-    python -m scripts.models.evaluate_fusion --model gated --features semantic --split val
-"""
+"""Evaluate the trained Gated Fusion model."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import logging
+from pathlib import Path
 
 import joblib
 import numpy as np
@@ -20,29 +15,33 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from scripts import config
 from scripts.evaluation.metrics import save_confusion_matrix_artifacts
-from scripts.models.fusion.factory import build_fusion_model
 from scripts.models.fusion.feature_loader import INPUT_CONFIGS, load_feature_tensors
-from scripts.models.train_fusion import load_labels
+from scripts.models.fusion.gated import build_gated_model
+from scripts.models.fusion.train import load_labels
 from scripts.utils.logging_utils import setup_logging
-from scripts.utils.outputs import checkpoint_dir, evaluation_dir, log_dir
 
 logger = logging.getLogger(__name__)
 
 
-def load_model_and_scaler(model_type: str, input_config: str):
-    ckpt_path = checkpoint_dir(input_config, model_type) / "best.pt"
-    scaler_path = checkpoint_dir(input_config, model_type) / "handcrafted_scaler.joblib"
+def _variant_root(variant: str | None = None) -> Path:
+    return config.RESULTS_DIR / config.GATED_FUSION_OUTPUT_DIR
+
+
+def load_model_and_scaler(model_cfg: dict):
+    variant = model_cfg["model"]
+    root = _variant_root(variant)
+    ckpt_path = root / "training" / "checkpoints" / "best.pt"
+    scaler_path = root / "training" / "checkpoints" / "handcrafted_scaler.joblib"
 
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
     if not scaler_path.exists():
         raise FileNotFoundError(f"Scaler not found: {scaler_path}")
 
-    model = build_fusion_model(model_type)
-    model.load_state_dict(torch.load(ckpt_path, map_location="cpu"))
+    model = build_gated_model(variant, model_cfg)
+    model.load_state_dict(torch.load(ckpt_path, map_location="cpu", weights_only=True))
     model.eval()
-    scaler = joblib.load(scaler_path)
-    return model, scaler
+    return model, joblib.load(scaler_path)
 
 
 def load_split(input_config: str, split: str, scaler):
@@ -61,14 +60,14 @@ def load_split(input_config: str, split: str, scaler):
     return loader, labels.numpy()
 
 
-def evaluate(model_type: str, input_config: str, split: str) -> dict:
+def evaluate(model_cfg: dict, split: str) -> dict:
+    variant = model_cfg["model"]
+    input_config = model_cfg.get("input_config", config.GATED_FUSION_INPUT_CONFIG)
     logger.info("=" * 60)
-    logger.info(
-        "Evaluating  model=%s  features=%s  split=%s", model_type, input_config, split
-    )
+    logger.info("Evaluating variant=%s features=%s split=%s", variant, input_config, split)
     logger.info("=" * 60)
 
-    model, scaler = load_model_and_scaler(model_type, input_config)
+    model, scaler = load_model_and_scaler(model_cfg)
     loader, true_labels = load_split(input_config, split, scaler)
     class_names = [config.ID_TO_CLASS[i] for i in range(config.NUM_LABELS)]
 
@@ -97,7 +96,7 @@ def evaluate(model_type: str, input_config: str, split: str) -> dict:
         zero_division=0,
     )
 
-    eval_root = evaluation_dir(input_config, model_type) / split
+    eval_root = _variant_root(variant) / "evaluation" / split
     cm_artifacts = save_confusion_matrix_artifacts(
         true_labels,
         preds,
@@ -111,7 +110,7 @@ def evaluate(model_type: str, input_config: str, split: str) -> dict:
     logger.info("Classification report:\n%s", report_str)
 
     return {
-        "model_type": model_type,
+        "model_name": variant,
         "input_config": input_config,
         "split": split,
         "accuracy": round(acc, 6),
@@ -132,16 +131,16 @@ def evaluate(model_type: str, input_config: str, split: str) -> dict:
 
 
 def save_evaluation(result: dict) -> None:
-    eval_root = evaluation_dir(result["input_config"], result["model_type"]) / result["split"]
+    eval_root = _variant_root(result["model_name"]) / "evaluation" / result["split"]
     eval_root.mkdir(parents=True, exist_ok=True)
 
     json_path = eval_root / "metrics.json"
-    with open(json_path, "w") as f:
+    with open(json_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
 
     txt_path = eval_root / "summary.txt"
     lines = [
-        f"Evaluation - {result['model_type']}  features={result['input_config']}  split={result['split']}",
+        f"Evaluation - {result['model_name']} features={result['input_config']} split={result['split']}",
         "=" * 60,
         f"Accuracy    : {result['accuracy']:.4f}  ({result['accuracy'] * 100:.2f}%)",
         f"Macro F1    : {result['macro_f1']:.4f}",
@@ -167,45 +166,16 @@ def save_evaluation(result: dict) -> None:
     logger.info("Saved -> %s", txt_path)
 
 
-def print_comparison(results: list[dict]) -> None:
-    if len(results) < 2:
-        return
-    logger.info("=" * 60)
-    logger.info("Model comparison")
-    logger.info("=" * 60)
-    header = f"{'Features':<12} {'Model':<10} {'Accuracy':>9} {'Macro F1':>9} {'Wtd F1':>8}"
-    logger.info(header)
-    logger.info("-" * 58)
-    for result in sorted(results, key=lambda x: x["accuracy"], reverse=True):
-        logger.info(
-            "%-12s %-10s %9.4f %9.4f %8.4f",
-            result["input_config"], result["model_type"],
-            result["accuracy"], result["macro_f1"], result["weighted_f1"],
-        )
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", action="append", choices=["concat", "gated"], dest="models")
-    parser.add_argument("--features", action="append", choices=INPUT_CONFIGS, dest="features")
+    parser.add_argument("--variant", default="gated_fusion")
+    parser.add_argument("--features", choices=INPUT_CONFIGS)
     parser.add_argument("--split", default="test", choices=["train", "val", "test"])
     args = parser.parse_args()
 
-    models = args.models or ["concat", "gated"]
-    feature_configs = args.features or ["fused"]
+    overrides = {"input_config": args.features} if args.features is not None else None
+    model_cfg = config.get_gated_fusion_config(args.variant, overrides)
 
-    # Best-effort log file: use the first model/feature combo
-    _logs_root = log_dir(feature_configs[0], models[0])
-    setup_logging(log_file=_logs_root / "evaluate.log")
-
-    all_results = []
-    for input_config in feature_configs:
-        for model_type in models:
-            try:
-                result = evaluate(model_type, input_config, args.split)
-                save_evaluation(result)
-                all_results.append(result)
-            except FileNotFoundError as exc:
-                logger.warning("SKIP %s/%s: %s", input_config, model_type, exc)
-
-    print_comparison(all_results)
+    setup_logging(log_file=_variant_root(args.variant) / "evaluation" / "evaluate.log")
+    result = evaluate(model_cfg, args.split)
+    save_evaluation(result)

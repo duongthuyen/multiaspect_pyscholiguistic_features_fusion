@@ -45,17 +45,13 @@ TEST_PATH       = PROCESSED_DIR / "test.csv"
 # RESULTS PATHS
 # =============================================================================
 # results/ holds publication-relevant artifacts. Training and evaluation outputs
-# are grouped by feature configuration, for example:
-#   results/semantic/training/
-#   results/semantic/evaluation/
-#   results/fused/late_concat/training/
-#   results/fused/gated/evaluation/
+# are grouped by model family, for example:
+#   results/gated_fusion/<variant>/training/
+#   results/gated_fusion/<variant>/evaluation/
 
 RESULTS_DIR     = ROOT_DIR / "results"
 MODELS_DIR      = RESULTS_DIR / "models"
-EVAL_DIR        = RESULTS_DIR / "evaluation"
 PLOTS_DIR       = RESULTS_DIR / "plots"
-LOGS_DIR        = RESULTS_DIR / "logs"
 
 
 # =============================================================================
@@ -103,10 +99,7 @@ def require_nrc_vad() -> None:
 # =============================================================================
 
 ROBERTA_MODEL_DIR     = MODELS_DIR / "roberta"
-TOKENIZED_DIR         = ROBERTA_MODEL_DIR / "tokenized"
 FINETUNED_ROBERTA_DIR = ROBERTA_MODEL_DIR / "finetuned"  # fine-tuned backbone without classification head
-FUSION_MODEL_DIR      = MODELS_DIR / "fusion"
-BASELINE_MODEL_DIR    = MODELS_DIR / "baselines"
 
 
 # =============================================================================
@@ -152,11 +145,12 @@ MERGE_SEPARATOR = ": "
 # ROBERTA SETTINGS
 # =============================================================================
 
-MENTAL_ROBERTA_NAME = "mental/mental-roberta-base"  # domain-adapted variant
-MAX_LENGTH          = 512       # Maximum token length RoBERTa accepts
-BATCH_SIZE          = 32        # Number of samples per training step
-LEARNING_RATE       = 2e-5      # Standard fine-tuning LR for transformers
-NUM_EPOCHS          = 2         # Full passes over the training data
+MENTAL_ROBERTA_NAME  = "mental/mental-roberta-base"  # domain-adapted variant
+MAX_LENGTH           = 512   # Maximum token length RoBERTa accepts
+ROBERTA_BATCH_SIZE   = 16   # Batch size for MentalRoBERTa fine-tuning (GPU-sensitive)
+FUSION_BATCH_SIZE    = 32   # Batch size for gated fusion DataLoaders
+LEARNING_RATE        = 2e-5  # Standard fine-tuning LR for transformers
+NUM_EPOCHS          = 5         # Full passes over the training data
 WEIGHT_DECAY        = 0.01      # Regularization to prevent overfitting
 WARMUP_RATIO        = 0.1       # Fraction of total steps used for LR warm-up
 GRAD_CLIP           = 1.0       # Gradient norm clipping threshold
@@ -183,14 +177,6 @@ COHERENCE_BREAK_THRESHOLD = 0.3   # cosine sim below this counts as a "break"
 # =============================================================================
 
 SPACY_MODEL = "en_core_web_sm"
-
-
-# =============================================================================
-# TFIDF SETTINGS (for baseline only)
-# =============================================================================
-
-TFIDF_MAX_FEATURES  = 10000     # Vocabulary size limit
-TFIDF_NGRAM_RANGE   = (1, 2)    # Unigrams and bigrams
 
 
 # =============================================================================
@@ -222,34 +208,67 @@ TOTAL_FEATURE_DIM = sum(FEATURE_DIMS.values())
 # =============================================================================
 # FUSION MODEL SETTINGS
 # =============================================================================
-# Two architectures: "concat" (primary) and "gated" (baseline for comparison).
-# Selected at runtime via FUSION_TYPE.
+# Output layout for the gated fusion model.
+GATED_FUSION_OUTPUT_DIR = "gated_fusion"
+GATED_FUSION_INPUT_CONFIG = "fused"
+DEFAULT_GATED_VARIANT = "gated_fusion"
 
-FUSION_TYPE = "concat"
-
-# Dimension-matched projections used by the concat fusion architecture.
-# Each branch's projection size scales with its native dimensionality so the
-# semantic branch doesn't dominate purely by dimension count.
-SEMANTIC_PROJECTION_DIM    = 256
-AFFECTIVE_PROJECTION_DIM   = 128
-HANDCRAFTED_PROJECTION_DIM = 64
-
-FUSION_DIM = (
-    SEMANTIC_PROJECTION_DIM
-    + AFFECTIVE_PROJECTION_DIM
-    + HANDCRAFTED_PROJECTION_DIM
-)
-
-# Equal-projection size used by the gated fusion baseline.
+# Architecture hyperparameters
 GATED_PROJECTION_DIM = 256
+GATED_GATE_HIDDEN_DIM = 128
+GATED_HANDCRAFTED_DROPOUT = 0.4
+GATED_AUX_WEIGHT = 0.3          # weight for auxiliary semantic classification loss
+GATED_DIVERSITY_WEIGHT = 0.01   # weight for gate-diversity penalty (lambda_div)
 
-# Training hyperparameters for the fusion model.
-FUSION_LR     = 1e-3
-FUSION_EPOCHS = 15
+# Training defaults
+FUSION_LR = 5e-4
+FUSION_EPOCHS = 20
+FUSION_LABEL_SMOOTHING = 0.1
+FUSION_GATE_WEIGHT_DECAY = 1e-4
+FUSION_EARLY_STOPPING_PATIENCE = 2
 
-# Dropout rates.
-BRANCH_DROPOUT     = 0.1
-CLASSIFIER_DROPOUT = 0.2
+GATED_FUSION_DEFAULTS = {
+    "model": DEFAULT_GATED_VARIANT,
+    "input_config": GATED_FUSION_INPUT_CONFIG,
+    "projection_dim": GATED_PROJECTION_DIM,
+    "gate_hidden_dim": GATED_GATE_HIDDEN_DIM,
+    "handcrafted_dropout": GATED_HANDCRAFTED_DROPOUT,
+    "aux_weight": GATED_AUX_WEIGHT,
+    "diversity_weight": GATED_DIVERSITY_WEIGHT,
+    "epochs": FUSION_EPOCHS,
+    "lr": FUSION_LR,
+    "batch_size": FUSION_BATCH_SIZE,
+    "seed": 42,
+    "label_smoothing": FUSION_LABEL_SMOOTHING,
+    "gate_weight_decay": FUSION_GATE_WEIGHT_DECAY,
+    "early_stopping_patience": FUSION_EARLY_STOPPING_PATIENCE,
+}
+
+
+def get_gated_fusion_config(
+    variant: str | None = None,
+    overrides: dict | None = None,
+) -> dict:
+    """Return the full config dict for the gated fusion model.
+
+    Parameters
+    ----------
+    variant : str, optional
+        Must be ``"gated_fusion"`` or None (defaults to ``"gated_fusion"``).
+    overrides : dict, optional
+        Any keys here override the defaults.
+    """
+    selected = variant or DEFAULT_GATED_VARIANT
+    if selected != DEFAULT_GATED_VARIANT:
+        raise ValueError(
+            f"Unknown gated fusion variant: {selected!r}. "
+            f"Only 'gated_fusion' is supported."
+        )
+    cfg = dict(GATED_FUSION_DEFAULTS)
+    cfg["model"] = selected
+    if overrides:
+        cfg.update({k: v for k, v in overrides.items() if v is not None})
+    return cfg
 
 
 # =============================================================================
@@ -269,28 +288,10 @@ XGBOOST_MAX_DEPTH = 6
 XGBOOST_LEARNING_RATE = 0.05
 
 
-# =============================================================================
-# END-TO-END FUSION MODEL SETTINGS
-# =============================================================================
-# Trains RoBERTa backbone + fusion layers jointly in one pass.
-# Two optimizer parameter groups with different LRs prevent the pre-trained
-# backbone from being overwhelmed by randomly-initialised fusion gradients.
-
-E2E_MODEL_DIR       = MODELS_DIR / "e2e"
-E2E_BACKBONE_LR     = 2e-5   # same as original RoBERTa fine-tuning LR
-E2E_FUSION_LR       = 1e-4   # 5× larger — fusion layers train from scratch
-E2E_EPOCHS          = 5
-E2E_BATCH_SIZE      = 16     # fits T4 (15 GB) at max_length=512
-E2E_WEIGHT_DECAY    = 0.01
-E2E_WARMUP_RATIO    = 0.1
-E2E_GRAD_CLIP       = 1.0
-E2E_DROPOUT         = 0.1
 
 
 # =============================================================================
 # REPRODUCIBILITY
-# =============================================================================
+# ============================================================================================
 
 SEED = 42
-
-

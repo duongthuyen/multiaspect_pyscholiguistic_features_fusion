@@ -6,8 +6,6 @@ from scripts import config
 
 
 MODEL_FOLDER_NAMES = {
-    "concat": "late_concat",
-    "gated": "gated",
     "logistic_regression": "logistic_regression",
     "random_forest": "random_forest",
     "support_vector_machine": "support_vector_machine",

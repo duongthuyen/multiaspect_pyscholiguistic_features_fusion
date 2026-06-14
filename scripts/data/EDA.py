@@ -152,12 +152,15 @@ def plot_class_distribution(datasets: dict[str, pd.DataFrame], save_dir: Path) -
             ax=ax
         )
 
-        ax.set_title(f"Class Distribution — {name} set", fontsize=14, pad =25)
+        ax.set_title(f"Class Distribution — {name} set", fontsize=14, pad=25)
         ax.set_xlabel("Mental Health Condition", fontsize=12)
         ax.set_ylabel("Number of Samples", fontsize=12)
-        ax.tick_params(axis='x', rotation=30)
 
-        ax.set_xticklabels([label.get_text().capitalize() for label in ax.get_xticklabels()])
+        # Use the source data directly — get_xticklabels() returns empty Text
+        # objects before plt.draw() in seaborn 0.13+, causing silent label loss.
+        ax.set_xticklabels(
+            [str(label).capitalize() for label in counts.index], rotation=30
+        )
 
         # Add count labels on top of each bar for readability
         for bar, count in zip(ax.patches, counts.values):
@@ -322,7 +325,7 @@ def analyze() -> None:
     Run the full EDA pipeline in order.
     Called by main.py with: python -m scripts.main --stage analyze
     """
-    save_dir = PLOTS_DIR / "analysis"
+    save_dir = PLOTS_DIR / "EDA"
 
     logger.info("=" * 60)
     logger.info("Starting data analysis")
@@ -341,7 +344,7 @@ def analyze() -> None:
     print_per_class_length_table(datasets)
 
     logger.info("=" * 60)
-    logger.info("Analysis complete. Plots saved to results/plots/analysis/")
+    logger.info("Analysis complete. Plots saved to results/plots/EDA/")
     logger.info("=" * 60)
 
 

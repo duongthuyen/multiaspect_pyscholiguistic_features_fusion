@@ -3,7 +3,13 @@ import unittest
 import torch
 
 from scripts import config
-from scripts.models.fusion import GatedFusion, LateConcatFusion, build_fusion_model
+from scripts.models.fusion import (
+    ClassAwareGatedFusion,
+    ContentGatedFusion,
+    LoadBalancedFusion,
+    PerClassGatedFusion,
+    build_gated_model,
+)
 from scripts.models.fusion.feature_loader import GROUP_SUBFEATURES
 
 
@@ -28,24 +34,11 @@ class FusionModelTests(unittest.TestCase):
             all(torch.isfinite(grad).all() for grad in grads if grad is not None)
         )
 
-    def test_late_concat_forward_backward(self):
-        self._assert_forward_backward(LateConcatFusion())
-
-    def test_gated_forward_backward(self):
-        self._assert_forward_backward(GatedFusion())
-
-    def test_late_concat_branch_representations(self):
-        model = LateConcatFusion()
-        semantic, affective, handcrafted = self._inputs(batch_size=3)
-        sem_repr, aff_repr, hand_repr = model.get_branch_representations(
-            semantic, affective, handcrafted
-        )
-        self.assertEqual(sem_repr.shape, (3, config.SEMANTIC_PROJECTION_DIM))
-        self.assertEqual(aff_repr.shape, (3, config.AFFECTIVE_PROJECTION_DIM))
-        self.assertEqual(hand_repr.shape, (3, config.HANDCRAFTED_PROJECTION_DIM))
+    def test_content_gated_forward_backward(self):
+        self._assert_forward_backward(ContentGatedFusion())
 
     def test_gated_branch_representations_equal_projection_dim(self):
-        model = GatedFusion()
+        model = ContentGatedFusion()
         semantic, affective, handcrafted = self._inputs(batch_size=3)
         sem_repr, aff_repr, hand_repr = model.get_branch_representations(
             semantic, affective, handcrafted
@@ -58,28 +51,36 @@ class FusionModelTests(unittest.TestCase):
             )
 
     def test_gated_return_gates_shape(self):
-        model = GatedFusion()
+        model = ContentGatedFusion()
         semantic, affective, handcrafted = self._inputs(batch_size=4)
         logits, gates = model(semantic, affective, handcrafted, return_gates=True)
         self.assertEqual(logits.shape, (4, config.NUM_LABELS))
-        # gates: (B, 3_branches, projection_dim)
-        self.assertEqual(gates.shape, (4, 3, config.GATED_PROJECTION_DIM))
+        self.assertEqual(gates.shape, (4, 3))
 
-    def test_factory_default_returns_late_concat(self):
-        model = build_fusion_model()
-        self.assertIsInstance(model, LateConcatFusion)
+    def test_all_gated_variants_forward_backward(self):
+        for cls in (
+            ContentGatedFusion,
+            ClassAwareGatedFusion,
+            LoadBalancedFusion,
+            PerClassGatedFusion,
+        ):
+            with self.subTest(cls=cls.__name__):
+                self._assert_forward_backward(cls())
 
-    def test_factory_explicit_concat(self):
-        model = build_fusion_model("concat")
-        self.assertIsInstance(model, LateConcatFusion)
+    def test_build_gated_model_variants(self):
+        expected = {
+            "content_gate": ContentGatedFusion,
+            "class_aware": ClassAwareGatedFusion,
+            "load_balance": LoadBalancedFusion,
+            "per_class_gate": PerClassGatedFusion,
+        }
+        for variant, cls in expected.items():
+            with self.subTest(variant=variant):
+                self.assertIsInstance(build_gated_model(variant), cls)
 
-    def test_factory_explicit_gated(self):
-        model = build_fusion_model("gated")
-        self.assertIsInstance(model, GatedFusion)
-
-    def test_factory_invalid_type_raises(self):
+    def test_build_gated_model_invalid_variant_raises(self):
         with self.assertRaises(ValueError):
-            build_fusion_model("invalid")
+            build_gated_model("invalid")
 
     def test_feature_loader_group_registry(self):
         self.assertEqual(GROUP_SUBFEATURES["semantic"], ["mental_roberta"])

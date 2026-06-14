@@ -171,7 +171,7 @@ def load_feature_tensors(
 
     Fused mode loads all feature groups. Single-group mode places the selected
     group in its natural branch and zero-fills unused branches so
-    LateConcatFusion and GatedFusion signatures remain unchanged.
+    Gated fusion signatures remain unchanged.
     """
     selected = input_config.lower()
     if selected == "fused":
@@ -206,6 +206,49 @@ def load_feature_tensors(
         torch.from_numpy(handcrafted),
         ids,
     )
+
+
+def apply_feature_masks(
+    affective: torch.Tensor,
+    handcrafted: torch.Tensor,
+    masks: dict,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Zero-mask selected feature dimensions in the affective and handcrafted
+    tensors according to a selection report mask dict.
+
+    This is the standard zero-masking approach for ablation studies: the model
+    architecture is UNCHANGED (same input dimensions), but features with
+    mask=0 are forced to zero at both train and test time.  Results trained
+    with and without the mask are directly comparable.
+
+    Parameters
+    ----------
+    affective   : Tensor (N, AFFECTIVE_DIM)
+    handcrafted : Tensor (N, HANDCRAFTED_DIM)
+    masks : dict
+        Output of ``feature_statistics.build_selection_masks()``.
+        Expected keys: "affective" (np.ndarray float32, shape AFFECTIVE_DIM),
+                       "handcrafted" (np.ndarray float32, shape HANDCRAFTED_DIM).
+
+    Returns
+    -------
+    (affective_masked, handcrafted_masked) — same shape, masked in-place clone.
+    """
+    aff_mask = torch.from_numpy(masks["affective"])   # (AFFECTIVE_DIM,)
+    hc_mask  = torch.from_numpy(masks["handcrafted"]) # (HANDCRAFTED_DIM,)
+
+    aff_masked = affective * aff_mask.unsqueeze(0)    # broadcast over N
+    hc_masked  = handcrafted * hc_mask.unsqueeze(0)
+
+    n_aff_dropped = int((masks["affective"] == 0).sum())
+    n_hc_dropped  = int((masks["handcrafted"] == 0).sum())
+    logger.info(
+        "Feature masks applied  affective: %d/%d dropped  handcrafted: %d/%d dropped",
+        n_aff_dropped, len(masks["affective"]),
+        n_hc_dropped,  len(masks["handcrafted"]),
+    )
+    return aff_masked, hc_masked
 
 
 def load_flat_feature_matrix(

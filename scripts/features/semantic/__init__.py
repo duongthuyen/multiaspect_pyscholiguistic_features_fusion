@@ -29,6 +29,4 @@ class SemanticExtractor(FeatureExtractorBase):
         return {"mental_roberta": self.mental_roberta}
 
 
-SEMANTIC_FEATURE_NAMES = SemanticExtractor().feature_names
-
-__all__ = ["SEMANTIC_FEATURE_NAMES", "SemanticExtractor"]
+__all__ = ["SemanticExtractor"]

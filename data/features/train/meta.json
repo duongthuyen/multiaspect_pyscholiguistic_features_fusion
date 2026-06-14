@@ -1,8 +1,8 @@
 {
-  "extraction_timestamp": "2026-05-06T11:02:34.379155+00:00",
+  "extraction_timestamp": "2026-05-12T09:25:29.428529+00:00",
   "row_count": 1,
   "model_versions": {
-    "transformers": "5.7.0",
+    "transformers": "5.8.0",
     "sentence_transformers": "5.4.1"
   },
   "dimensions": {

@@ -29,23 +29,13 @@ class ExperimentRootTests(unittest.TestCase):
         root = experiment_root("fused")
         self.assertEqual(root.name, "fused")
 
-    def test_fused_concat_returns_late_concat_subdir(self):
-        root = experiment_root("fused", "concat")
-        self.assertEqual(root.name, "late_concat")
-        self.assertEqual(root.parent.name, "fused")
-
-    def test_fused_gated_returns_gated_subdir(self):
-        root = experiment_root("fused", "gated")
-        self.assertEqual(root.name, "gated")
-        self.assertEqual(root.parent.name, "fused")
-
     def test_single_group_no_model(self):
         root = experiment_root("semantic")
         self.assertEqual(root.name, "semantic")
 
     def test_single_group_with_model(self):
-        root = experiment_root("semantic", "concat")
-        self.assertEqual(root.name, "late_concat")
+        root = experiment_root("semantic", "logistic_regression")
+        self.assertEqual(root.name, "logistic_regression")
         self.assertEqual(root.parent.name, "semantic")
 
     def test_logistic_regression_name_mapping(self):
@@ -67,12 +57,12 @@ class TrainingDirTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_training_suffix(self):
-        path = training_dir("fused", "concat")
+        path = training_dir("fused", "logistic_regression")
         self.assertEqual(path.name, "training")
 
     def test_is_under_experiment_root(self):
-        path = training_dir("semantic", "gated")
-        self.assertEqual(path.parent, experiment_root("semantic", "gated"))
+        path = training_dir("semantic", "random_forest")
+        self.assertEqual(path.parent, experiment_root("semantic", "random_forest"))
 
 
 class EvaluationDirTests(unittest.TestCase):
@@ -85,12 +75,12 @@ class EvaluationDirTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_evaluation_suffix(self):
-        path = evaluation_dir("fused", "gated")
+        path = evaluation_dir("fused", "logistic_regression")
         self.assertEqual(path.name, "evaluation")
 
     def test_is_under_experiment_root(self):
-        path = evaluation_dir("fused", "gated")
-        self.assertEqual(path.parent, experiment_root("fused", "gated"))
+        path = evaluation_dir("fused", "logistic_regression")
+        self.assertEqual(path.parent, experiment_root("fused", "logistic_regression"))
 
 
 class CheckpointDirTests(unittest.TestCase):
@@ -103,12 +93,12 @@ class CheckpointDirTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_checkpoint_suffix(self):
-        path = checkpoint_dir("fused", "concat")
+        path = checkpoint_dir("fused", "logistic_regression")
         self.assertEqual(path.name, "checkpoints")
 
     def test_is_under_training_dir(self):
-        path = checkpoint_dir("fused", "concat")
-        self.assertEqual(path.parent, training_dir("fused", "concat"))
+        path = checkpoint_dir("fused", "logistic_regression")
+        self.assertEqual(path.parent, training_dir("fused", "logistic_regression"))
 
 
 class LogDirTests(unittest.TestCase):
@@ -121,18 +111,24 @@ class LogDirTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_log_suffix(self):
-        path = log_dir("fused", "concat")
+        path = log_dir("fused", "logistic_regression")
         self.assertEqual(path.name, "logs")
 
     def test_is_under_training_dir(self):
-        path = log_dir("semantic", "gated")
-        self.assertEqual(path.parent, training_dir("semantic", "gated"))
+        path = log_dir("semantic", "random_forest")
+        self.assertEqual(path.parent, training_dir("semantic", "random_forest"))
 
-    def test_concat_and_gated_have_distinct_log_dirs(self):
-        self.assertNotEqual(log_dir("fused", "concat"), log_dir("fused", "gated"))
+    def test_classical_models_have_distinct_log_dirs(self):
+        self.assertNotEqual(
+            log_dir("fused", "logistic_regression"),
+            log_dir("fused", "random_forest"),
+        )
 
     def test_fused_and_single_group_have_distinct_log_dirs(self):
-        self.assertNotEqual(log_dir("fused", "concat"), log_dir("semantic", "concat"))
+        self.assertNotEqual(
+            log_dir("fused", "logistic_regression"),
+            log_dir("semantic", "logistic_regression"),
+        )
 
 
 if __name__ == "__main__":

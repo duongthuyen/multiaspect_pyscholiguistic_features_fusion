@@ -13,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 from scripts import config
 from scripts.evaluation.metrics import save_confusion_matrix_artifacts
 from scripts.models.fusion.feature_loader import INPUT_CONFIGS, load_flat_feature_matrix
-from scripts.models.train_fusion import load_labels
+from scripts.models.fusion.train import load_labels
 from scripts.utils.logging_utils import setup_logging
 from scripts.utils.outputs import checkpoint_dir, evaluation_dir, log_dir
 

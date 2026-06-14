@@ -1,25 +1,20 @@
 """
-Training loop for improved gated fusion variants (v2).
+Training loop for the Gated Fusion model.
 
-Usage — YAML config (recommended):
-    python -m scripts.models.train_fused_v2 --config configs/fused_v2_content_gate.yaml
-    python -m scripts.models.train_fused_v2 --config configs/fused_v2_load_balance.yaml
+Usage:
+    python -m scripts.models.fusion.train
+    python -m scripts.models.fusion.train --epochs 20 --lr 5e-4
 
-Usage — CLI overrides (all keys can override YAML):
-    python -m scripts.models.train_fused_v2 --model content_gate --epochs 20 --lr 5e-4
-    python -m scripts.models.train_fused_v2 \\
-        --config configs/fused_v2_load_balance.yaml --lb_weight 0.05
+All defaults live in scripts/config.py. CLI flags override those defaults.
 
-Supported variants:  content_gate | class_aware | load_balance | per_class_gate
+Training behavior:
+  early_stopping_patience=2   Stop if val_loss does not improve for 2 epochs.
+  label_smoothing=0.1         Applied to all CE losses (main + auxiliary).
+  handcrafted_dropout=0.4     Passed to model constructor.
+  gate_weight_decay=1e-4      Gate parameters get dedicated weight decay;
+                               other parameters have weight_decay=0.
 
-Training improvements vs original train_fusion.py:
-  early_stopping_patience=2   Stop if val_loss doesn't improve for 2 epochs.
-  label_smoothing=0.1         Applied to all CE losses (main + aux where used).
-  handcrafted_dropout=0.4     Passed to model constructor (vs 0.0 in original).
-  gate_weight_decay=1e-4      Gate parameters get dedicated weight decay; other
-                               parameters have weight_decay=0.
-
-Outputs — results/fused_v2/<variant>/:
+Outputs written to results/gated_fusion/:
   training/checkpoints/best.pt
   training/logs/train.log
   training/logs/history.json
@@ -48,7 +43,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import yaml
 from sklearn.metrics import classification_report, f1_score
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
@@ -56,7 +50,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from scripts import config
 from scripts.evaluation.metrics import save_confusion_matrix_artifacts
 from scripts.models.fusion.feature_loader import INPUT_CONFIGS, load_feature_tensors
-from scripts.models.fusion.gated_fusion_v2 import build_v2_model
+from scripts.models.fusion.gated import build_gated_model
 from scripts.utils.logging_utils import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -67,23 +61,24 @@ _ROBERTA_BASELINE_F1 = 0.8873
 
 
 # ---------------------------------------------------------------------------
-# Path helpers — isolated from original outputs.py
+# Path helpers
 # ---------------------------------------------------------------------------
 
-def _v2_root(model_name: str) -> Path:
-    return config.RESULTS_DIR / "fused_v2" / model_name
+def _output_root(cfg: dict | None = None) -> Path:
+    """Root output directory: results/gated_fusion/"""
+    return config.RESULTS_DIR / config.GATED_FUSION_OUTPUT_DIR
 
 
-def _v2_ckpt_dir(model_name: str) -> Path:
-    return _v2_root(model_name) / "training" / "checkpoints"
+def _ckpt_dir(cfg: dict | None = None) -> Path:
+    return _output_root() / "training" / "checkpoints"
 
 
-def _v2_log_dir(model_name: str) -> Path:
-    return _v2_root(model_name) / "training" / "logs"
+def _log_dir(cfg: dict | None = None) -> Path:
+    return _output_root() / "training" / "logs"
 
 
-def _v2_eval_dir(model_name: str) -> Path:
-    return _v2_root(model_name) / "evaluation"
+def _eval_dir(cfg: dict | None = None) -> Path:
+    return _output_root() / "evaluation"
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +93,11 @@ def _load_labels(split: str) -> torch.Tensor:
     }
     df = pd.read_csv(path_map[split])
     return torch.tensor(df[config.LABEL_COL].values, dtype=torch.long)
+
+
+def load_labels(split: str) -> torch.Tensor:
+    """Public label loader used by classical model helpers."""
+    return _load_labels(split)
 
 
 def _load_split(split: str, input_config: str):
@@ -120,6 +120,18 @@ def _scale_hc(scaler: StandardScaler, tensor: torch.Tensor, fit: bool = False) -
 
 def _accuracy(logits: torch.Tensor, labels: torch.Tensor) -> float:
     return (logits.argmax(dim=1) == labels).float().mean().item()
+
+
+def accuracy(logits: torch.Tensor, labels: torch.Tensor) -> float:
+    return _accuracy(logits, labels)
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +180,7 @@ def _run_epoch(
             if training:
                 optimizer.zero_grad()
                 total_loss_t.backward()
+                nn.utils.clip_grad_norm_(model.parameters(), config.GRAD_CLIP)
                 optimizer.step()
 
             total_loss += total_loss_t.item()
@@ -175,6 +188,16 @@ def _run_epoch(
             n_batches += 1
 
     return total_loss / n_batches, total_acc / n_batches
+
+
+def run_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    optimizer: torch.optim.Optimizer | None,
+    device: torch.device,
+) -> tuple[float, float]:
+    return _run_epoch(model, loader, criterion, optimizer, device)
 
 
 def _predict(
@@ -383,7 +406,7 @@ def train(cfg: dict) -> dict:
     input_config: str = cfg.get("input_config", "fused")
     epochs: int = int(cfg.get("epochs", config.FUSION_EPOCHS))
     lr: float = float(cfg.get("lr", config.FUSION_LR))
-    batch_size: int = int(cfg.get("batch_size", config.BATCH_SIZE))
+    batch_size: int = int(cfg.get("batch_size", config.FUSION_BATCH_SIZE))
     seed: int = int(cfg.get("seed", config.SEED))
     label_smoothing: float = float(cfg.get("label_smoothing", 0.1))
     gate_weight_decay: float = float(cfg.get("gate_weight_decay", 1e-4))
@@ -397,16 +420,17 @@ def train(cfg: dict) -> dict:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    ckpt_root = _v2_ckpt_dir(variant)
-    logs_root = _v2_log_dir(variant)
-    eval_root = _v2_eval_dir(variant)
+    ckpt_root = _ckpt_dir()
+    logs_root = _log_dir()
+    eval_root = _eval_dir()
     for p in [ckpt_root, logs_root, eval_root]:
         p.mkdir(parents=True, exist_ok=True)
 
     setup_logging(log_file=logs_root / "train.log")
     logger.info("=" * 65)
     logger.info(
-        "V2 training  variant=%s  features=%s  device=%s", variant, input_config, device
+        "Gated fusion training  variant=%s  features=%s  device=%s",
+        variant, input_config, device,
     )
     logger.info(
         "epochs=%d  lr=%g  batch=%d  seed=%d  label_smoothing=%g  gate_wd=%g",
@@ -445,7 +469,7 @@ def train(cfg: dict) -> dict:
         batch_size=batch_size, shuffle=False, num_workers=0,
     )
 
-    model = build_v2_model(variant, cfg).to(device)
+    model = build_gated_model(variant, cfg).to(device)
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     n_total = sum(p.numel() for p in model.parameters())
     logger.info(
@@ -618,7 +642,7 @@ def _save_results(results: dict, eval_root: Path, logs_root: Path) -> None:
 
     txt_path = eval_root / "summary.txt"
     lines = [
-        f"V2 Fusion Summary — {results['model_name']} ({results['model_class']})",
+        f"Gated Fusion Summary - {results['model_name']} ({results['model_class']})",
         "=" * 60,
         f"Input config          : {results['input_config']}",
         f"Epochs trained        : {results['epochs_trained']}  (best: {results['best_epoch']})",
@@ -667,15 +691,9 @@ def _save_results(results: dict, eval_root: Path, logs_root: Path) -> None:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Train improved gated fusion variants (v2).",
+        description="Train the Gated Fusion model.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
-    )
-    p.add_argument("--config", help="YAML config file path (CLI flags override any key).")
-    p.add_argument(
-        "--model",
-        choices=["content_gate", "class_aware", "load_balance", "per_class_gate"],
-        help="Variant to train.",
     )
     p.add_argument("--features", dest="input_config", choices=INPUT_CONFIGS)
     p.add_argument("--epochs", type=int)
@@ -686,7 +704,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--gate_weight_decay", type=float)
     p.add_argument("--early_stopping_patience", type=int)
     p.add_argument("--aux_weight", type=float)
-    p.add_argument("--lb_weight", type=float)
+    p.add_argument("--diversity_weight", type=float)
     p.add_argument("--projection_dim", type=int)
     p.add_argument("--gate_hidden_dim", type=int)
     p.add_argument("--handcrafted_dropout", type=float)
@@ -696,25 +714,16 @@ def _parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = _parse_args()
 
-    cfg: dict = {}
-    if args.config:
-        with open(args.config) as f:
-            cfg = yaml.safe_load(f) or {}
-
-    # CLI overrides — only set if the arg was explicitly provided (not None).
+    overrides = {}
     for key in (
-        "model", "input_config", "epochs", "lr", "batch_size", "seed",
+        "input_config", "epochs", "lr", "batch_size", "seed",
         "label_smoothing", "gate_weight_decay", "early_stopping_patience",
-        "aux_weight", "lb_weight", "projection_dim", "gate_hidden_dim",
+        "aux_weight", "diversity_weight", "projection_dim", "gate_hidden_dim",
         "handcrafted_dropout",
     ):
         val = getattr(args, key, None)
         if val is not None:
-            cfg[key] = val
+            overrides[key] = val
 
-    if "model" not in cfg:
-        raise SystemExit(
-            "error: --model is required (or provide a YAML config with a 'model' key)"
-        )
-
+    cfg = config.get_gated_fusion_config(overrides=overrides)
     train(cfg)

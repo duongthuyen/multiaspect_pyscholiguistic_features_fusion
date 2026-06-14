@@ -1,5 +1,5 @@
 """
-Tests for pure / nearly-pure functions in scripts/models/train_fusion.py.
+Tests for pure / nearly-pure functions in scripts/models/fusion/train.py.
 
 No real data files are required. Tiny fake models and DataLoaders are used
 to verify the training loop helpers without any heavy computation.
@@ -13,9 +13,9 @@ import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
-from scripts.models.train_fusion import (
+from scripts.models.fusion.train import (
     _predict,
-    _scale_handcrafted,
+    _scale_hc,
     accuracy,
     run_epoch,
     set_seed,
@@ -69,11 +69,11 @@ class AccuracyTests(unittest.TestCase):
         self.assertIsInstance(result, float)
 
 
-class ScaleHandcraftedTests(unittest.TestCase):
+class ScaleHcTests(unittest.TestCase):
     def test_fit_transform_changes_statistics(self):
         data = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         scaler = StandardScaler()
-        scaled = _scale_handcrafted(scaler, data, fit=True)
+        scaled = _scale_hc(scaler, data, fit=True)
         # After StandardScaler the mean of each column is approximately 0
         self.assertAlmostEqual(float(scaled[:, 0].mean()), 0.0, places=5)
         self.assertAlmostEqual(float(scaled[:, 1].mean()), 0.0, places=5)
@@ -82,22 +82,22 @@ class ScaleHandcraftedTests(unittest.TestCase):
         train = torch.tensor([[0.0, 0.0], [2.0, 2.0]])
         test = torch.tensor([[1.0, 1.0]])
         scaler = StandardScaler()
-        _scale_handcrafted(scaler, train, fit=True)
-        scaled_test = _scale_handcrafted(scaler, test, fit=False)
+        _scale_hc(scaler, train, fit=True)
+        scaled_test = _scale_hc(scaler, test, fit=False)
         # mean of train columns is 1.0; test value 1.0 → scaled ~= 0.0
         self.assertAlmostEqual(float(scaled_test[0, 0]), 0.0, places=4)
 
     def test_returns_float32_tensor(self):
         data = torch.randn(4, 3)
         scaler = StandardScaler()
-        scaled = _scale_handcrafted(scaler, data, fit=True)
+        scaled = _scale_hc(scaler, data, fit=True)
         self.assertIsInstance(scaled, torch.Tensor)
         self.assertEqual(scaled.dtype, torch.float32)
 
     def test_output_shape_preserved(self):
         data = torch.randn(8, 5)
         scaler = StandardScaler()
-        scaled = _scale_handcrafted(scaler, data, fit=True)
+        scaled = _scale_hc(scaler, data, fit=True)
         self.assertEqual(scaled.shape, data.shape)
 
 
@@ -115,6 +115,10 @@ class _TinyFusionModel(nn.Module):
         handcrafted: torch.Tensor,
     ) -> torch.Tensor:
         return self.fc(torch.cat([semantic, affective, handcrafted], dim=1))
+
+    def training_step(self, semantic, affective, handcrafted, labels, criterion):
+        logits = self.forward(semantic, affective, handcrafted)
+        return criterion(logits, labels), logits, torch.empty(logits.shape[0], 3)
 
 
 def _make_loader(n_rows: int = 8, sem_dim: int = 4, aff_dim: int = 2, hc_dim: int = 2, num_labels: int = 3):

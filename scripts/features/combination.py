@@ -28,11 +28,16 @@ def combine_feature_group(group: str, split: str):
     return out_path
 
 
-if __name__ == "__main__":
+def main() -> None:
     setup_logging()
+    logger.info("Combining features for splits=%s  groups=%s", SPLITS, GROUPS)
     for split in SPLITS:
         for group in GROUPS:
             try:
                 combine_feature_group(group, split)
             except Exception as exc:
                 logger.error("Error combining %s/%s: %s", group, split, exc)
+
+
+if __name__ == "__main__":
+    main()

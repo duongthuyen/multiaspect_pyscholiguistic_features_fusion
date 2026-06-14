@@ -1,5 +1,5 @@
 """
-Tests for output-writing functions in scripts/models/evaluate_fusion.py.
+Tests for output-writing functions in scripts/models/fusion/evaluate.py.
 
 Model loading and inference are NOT tested here (they require a trained
 checkpoint on disk). Only the pure serialisation and formatting logic
@@ -12,16 +12,16 @@ import unittest
 from pathlib import Path
 
 import scripts.config as cfg
-from scripts.models.evaluate_fusion import save_evaluation
+from scripts.models.fusion.evaluate import save_evaluation
 
 _ORIG_RESULTS_DIR = cfg.RESULTS_DIR
 
 
-def _fake_result(input_config: str = "fused", model_type: str = "concat", split: str = "test") -> dict:
+def _fake_result(input_config: str = "fused", model_name: str = "content_gate", split: str = "test") -> dict:
     """Minimal result dict matching the structure produced by evaluate()."""
     class_names = [cfg.ID_TO_CLASS[i] for i in range(cfg.NUM_LABELS)]
     return {
-        "model_type": model_type,
+        "model_name": model_name,
         "input_config": input_config,
         "split": split,
         "accuracy": 0.812345,
@@ -57,51 +57,46 @@ class SaveEvaluationTests(unittest.TestCase):
 
     def test_creates_metrics_json(self):
         result = self._run()
-        from scripts.utils.outputs import evaluation_dir
-        json_path = evaluation_dir("fused", "concat") / "test" / "metrics.json"
+        json_path = cfg.RESULTS_DIR / "gated_fusion" / "content_gate" / "evaluation" / "test" / "metrics.json"
         self.assertTrue(json_path.exists(), msg=f"Expected {json_path}")
 
     def test_metrics_json_content(self):
         result = self._run()
-        from scripts.utils.outputs import evaluation_dir
-        json_path = evaluation_dir("fused", "concat") / "test" / "metrics.json"
+        json_path = cfg.RESULTS_DIR / "gated_fusion" / "content_gate" / "evaluation" / "test" / "metrics.json"
         with open(json_path) as f:
             data = json.load(f)
         self.assertAlmostEqual(data["accuracy"], result["accuracy"])
         self.assertEqual(data["split"], "test")
-        self.assertEqual(data["model_type"], "concat")
+        self.assertEqual(data["model_name"], "content_gate")
 
     def test_creates_summary_txt(self):
         result = self._run()
-        from scripts.utils.outputs import evaluation_dir
-        txt_path = evaluation_dir("fused", "concat") / "test" / "summary.txt"
+        txt_path = cfg.RESULTS_DIR / "gated_fusion" / "content_gate" / "evaluation" / "test" / "summary.txt"
         self.assertTrue(txt_path.exists())
 
     def test_summary_txt_contains_metrics(self):
         result = self._run()
-        from scripts.utils.outputs import evaluation_dir
-        txt_path = evaluation_dir("fused", "concat") / "test" / "summary.txt"
+        txt_path = cfg.RESULTS_DIR / "gated_fusion" / "content_gate" / "evaluation" / "test" / "summary.txt"
         text = txt_path.read_text(encoding="utf-8")
         self.assertIn("0.8123", text)
-        self.assertIn("concat", text)
+        self.assertIn("content_gate", text)
         self.assertIn("fused", text)
 
     def test_different_split_creates_separate_directory(self):
         self._run(split="val")
-        from scripts.utils.outputs import evaluation_dir
-        val_path = evaluation_dir("fused", "concat") / "val" / "metrics.json"
+        val_path = cfg.RESULTS_DIR / "gated_fusion" / "content_gate" / "evaluation" / "val" / "metrics.json"
         self.assertTrue(val_path.exists())
 
     def test_different_model_creates_separate_directory(self):
-        self._run(model_type="gated")
-        from scripts.utils.outputs import evaluation_dir
-        json_path = evaluation_dir("fused", "gated") / "test" / "metrics.json"
+        self._run(model_name="load_balance")
+        json_path = cfg.RESULTS_DIR / "gated_fusion" / "load_balance" / "evaluation" / "test" / "metrics.json"
         self.assertTrue(json_path.exists())
 
     def test_all_class_names_in_summary(self):
         result = self._run()
-        from scripts.utils.outputs import evaluation_dir
-        txt = (evaluation_dir("fused", "concat") / "test" / "summary.txt").read_text()
+        txt = (
+            cfg.RESULTS_DIR / "gated_fusion" / "content_gate" / "evaluation" / "test" / "summary.txt"
+        ).read_text()
         for cls_name in cfg.ID_TO_CLASS.values():
             self.assertIn(cls_name, txt)
 

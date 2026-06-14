@@ -189,7 +189,7 @@ def set_seed(seed: int) -> None:
 
 def finetune(
     epochs: int = config.NUM_EPOCHS,
-    batch_size: int = config.BATCH_SIZE,
+    batch_size: int = config.ROBERTA_BATCH_SIZE,
     lr: float = config.LEARNING_RATE,
     weight_decay: float = config.WEIGHT_DECAY,
     warmup_ratio: float = config.WARMUP_RATIO,
@@ -394,7 +394,7 @@ if __name__ == "__main__":
         description="Fine-tune MentalRoBERTa and extract CLS embeddings."
     )
     parser.add_argument("--epochs", type=int, default=config.NUM_EPOCHS)
-    parser.add_argument("--batch", type=int, default=config.BATCH_SIZE)
+    parser.add_argument("--batch", type=int, default=config.ROBERTA_BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=config.LEARNING_RATE)
     parser.add_argument("--weight-decay", type=float, default=config.WEIGHT_DECAY)
     parser.add_argument("--warmup-ratio", type=float, default=config.WARMUP_RATIO)
