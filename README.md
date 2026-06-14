@@ -1,34 +1,63 @@
-# A Multi-Aspect Linguistic Feature Fusion Network for Mental Health Text Classification
+# Multi-Aspect Psycholinguistic Features for Mental Health Text Classification via Gated Fusion
 
-Graduation research project — Hanoi University of Science and Technology.
+Graduation thesis — Hanoi University of Science and Technology, 2026.
+
+**Student:** Dương Thị Huyền (MSSV 20224317)  
+**Supervisor:** Ph.D. Do Thi Ngoc Diep
+
+---
 
 ## Overview
 
-This project classifies mental health conditions from Reddit posts (ADHD, Anxiety, Bipolar, Depression, PTSD, None) by extracting five complementary feature groups and combining them with a learnable gated fusion network.
+This project classifies Reddit posts into six mental health categories (ADHD, Anxiety, Bipolar, Depression, PTSD, None) by combining a domain-adapted language model with interpretable psycholinguistic features through a gated fusion network.
 
-| Feature group | Dims | What it captures |
+The pipeline has five stages:
+
+1. **Preprocessing** — merge title + body, clean URLs
+2. **Feature extraction** — five complementary feature groups (828 dims total)
+3. **Feature analysis** — eta-squared effect size, linguistic profiling, feature selection (60 → 42 features retained)
+4. **Fusion models** — two fusion strategies evaluated against a MentalRoBERTa baseline
+5. **Evaluation & gate audit** — macro F1, per-class F1, confusion analysis, branch-weight inspection
+
+### Feature Groups
+
+| Group | Dims | What it captures |
 |---|---|---|
-| **Semantic** | 768 | MentalRoBERTa CLS embeddings |
-| **Lexical** | 11 | MTLD, word rates, pronouns, punctuation |
-| **Syntactic** | 8 | Dependency complexity, POS ratios, readability |
-| **Affective** | 34 | GoEmotions scores, VAD scores, VADER sentiment |
-| **Structural** | 7 | Sentence coherence, topic drift, tense distribution |
+| Semantic | 768 | MentalRoBERTa CLS embedding (fine-tuned) |
+| Lexical | 11 | MTLD, word rates, pronoun rates, punctuation |
+| Syntactic | 8 | Dependency complexity, POS ratios, readability |
+| Structural | 7 | Sentence coherence, topic drift, tense distribution |
+| Affective | 34 | GoEmotions (28) + NRC-VAD (3) + VADER (3) |
 
-Four gated fusion variants are implemented on top of these features:
+### Models
 
-| Variant | Description |
+| Model | Description |
 |---|---|
-| `content_gate` | Gate MLP sees all three raw feature branches simultaneously |
-| `class_aware` | Gate also receives soft class probabilities from an auxiliary semantic head |
-| `load_balance` | Extends `class_aware` with a diversity penalty that discourages gate uniformity |
-| `per_class_gate` | Each class has its own set of branch weights, mixed by auxiliary class probabilities |
+| `MentalRoBERTa` | Fine-tuned encoder-only baseline (CLS → Linear) |
+| `ConcatMLP` | Naive concatenation of all branches → MLP classifier |
+| `GatedFusion` | Three branches (semantic, affective, handcrafted) combined by a class-aware learned gate |
 
-Classical baselines (Logistic Regression, Random Forest, SVM, XGBoost) are available separately.
+---
+
+## Results
+
+Evaluated across five random seeds (0, 1, 2, 3, 42):
+
+| Model | Accuracy | Macro F1 |
+|---|---|---|
+| MentalRoBERTa (baseline) | 0.8871 | 0.8873 |
+| Concat+MLP | 0.8886 ± 0.0022 | 0.8874 ± 0.0023 |
+| Gated Fusion | 0.8870 ± 0.0017 | 0.8858 ± 0.0016 |
+
+All three models are statistically equivalent (within seed-to-seed variance). Gated Fusion's value is interpretability: its gate weights expose per-class branch reliance. The most consistent per-class gains are on PTSD (+0.009) and Anxiety (+0.006).
+
+---
 
 ## Requirements
 
-- Python 3.10+
-- PyTorch ≥ 2.0
+- Python 3.10
+- PyTorch 2.4
+- CUDA GPU recommended for fine-tuning and feature extraction (CPU sufficient for fusion training)
 - See `requirements.txt` for the full dependency list
 
 ## Setup
@@ -46,171 +75,136 @@ pip install -r requirements.txt
 python -m spacy download en_core_web_sm
 ```
 
-> **NRC-VAD Lexicon** — the affective VAD extractor requires the NRC Valence-Arousal-Dominance lexicon. Download it from http://saifmohammad.com/WebPages/nrc-vad.html and place it at `data/lexicons/NRC-VAD-Lexicon.txt`.
+> **NRC-VAD Lexicon** — required for affective VAD features. Download from http://saifmohammad.com/WebPages/nrc-vad.html and place at `data/lexicons/NRC-VAD-Lexicon.txt`.
 
-## Full Pipeline
+---
 
-Run these steps in order when starting from raw data.
+## Pipeline
 
-### Step 1 — Preprocess raw CSV files
+Run these steps in order from raw data.
+
+### Step 1 — Preprocess
 
 ```bash
 python -m scripts.data.preprocessing
 ```
 
-Reads `data/original/both_{train,val,test}.csv`, merges title + post, cleans URLs and whitespace, writes to `data/processed/{train,val,test}.csv`.
+Reads `data/original/both_{train,val,test}.csv`, merges title + post, cleans URLs, writes to `data/processed/`.
 
-### Step 2 — (Optional) Fine-tune MentalRoBERTa backbone
-
-Skip this step if you want to use the pre-trained `mental/mental-roberta-base` weights directly.
+### Step 2 — Fine-tune MentalRoBERTa
 
 ```bash
-python -m scripts.features.semantic.finetune_mental_roberta
-# With overrides:
 python -m scripts.features.semantic.finetune_mental_roberta --epochs 5 --batch 16 --lr 2e-5
 ```
 
-Saves the fine-tuned backbone to `results/models/roberta/finetuned/`.
+Saves the fine-tuned backbone to `results/models/roberta/finetuned/`. This backbone is shared by all fusion models.
 
 ### Step 3 — Extract features
 
 ```bash
-# Extract all groups for all splits (run once per split)
 python -m scripts.features.extract --input data/processed/train.csv --split train
 python -m scripts.features.extract --input data/processed/val.csv   --split val
 python -m scripts.features.extract --input data/processed/test.csv  --split test
 ```
 
-Partial extraction or forced re-extraction:
+Force re-extraction of a single group:
 
 ```bash
-# Re-extract only the affective group
 python -m scripts.features.extract --input data/processed/train.csv --split train \
     --components affective --force
-
-# Extract only VAD and VADER sub-features
-python -m scripts.features.extract --input data/processed/train.csv --split train \
-    --components "affective.vad,affective.vader" --force
 ```
 
-### Step 4 — Train gated fusion models
+### Step 4 — Train fusion models
+
+**Single seed:**
 
 ```bash
-python -m scripts.models.fusion.train --variant content_gate
-python -m scripts.models.fusion.train --variant class_aware
-python -m scripts.models.fusion.train --variant load_balance
-python -m scripts.models.fusion.train --variant per_class_gate
+python -m scripts.run_one_seed --model gated_fusion --seed 42
+python -m scripts.run_one_seed --model concat_mlp   --seed 42
 ```
 
-Override any hyperparameter from the command line:
+**Multi-seed (5 seeds, used for reported results):**
 
 ```bash
-python -m scripts.models.fusion.train --variant load_balance --epochs 30 --lr 1e-3
+python -m scripts.run_multi_seed --model gated_fusion
+python -m scripts.run_multi_seed --model concat_mlp
 ```
 
-All defaults are defined in `scripts/config.py`. Full list of CLI flags:
+Key hyperparameters (all defaults in `scripts/config.py`):
 
-| Flag | Default | Description |
-|---|---|---|
-| `--variant` | `content_gate` | One of the four supported variants |
-| `--features` | `fused` | Feature subset: `semantic`, `lexical`, `syntactic`, `structural`, `affective`, `fused` |
-| `--epochs` | 20 | Maximum training epochs |
-| `--lr` | 5e-4 | Adam learning rate |
-| `--batch` | 32 | Batch size |
-| `--seed` | 42 | Random seed |
-| `--label_smoothing` | 0.1 | CrossEntropyLoss label smoothing |
-| `--gate_weight_decay` | 1e-4 | Weight decay for gate parameters |
-| `--early_stopping_patience` | 2 | Stop if val loss does not improve for N epochs |
-| `--aux_weight` | 0.3 | Auxiliary CE loss coefficient (class_aware, load_balance, per_class_gate) |
-| `--projection_dim` | 256 | Branch projection output dimension |
-| `--gate_hidden_dim` | 128 | Gate MLP hidden dimension |
-| `--handcrafted_dropout` | 0.4 | Dropout on the handcrafted branch |
+| Parameter | Value |
+|---|---|
+| Optimizer | Adam |
+| Learning rate | 5e-4 |
+| Max epochs | 20 |
+| Batch size | 32 |
+| Early-stop patience | 2 |
+| Label smoothing | 0.1 |
+| Projection dim | 256 |
+| Gate hidden dim | 128 |
+| Handcrafted dropout | 0.4 |
+| Diversity penalty λ_div | 0.01 |
+| Auxiliary weight λ_aux | 0.3 |
 
-### Step 5 — Evaluate a trained model
+### Step 5 — Evaluate
 
 ```bash
-python -m scripts.models.fusion.evaluate --variant content_gate --split test
-python -m scripts.models.fusion.evaluate --variant class_aware  --split val
+python -m scripts.models.fusion.evaluate --model gated_fusion --seed 42 --split test
 ```
 
-### Step 6 — Classical baselines
+---
+
+## Analysis
 
 ```bash
-python -m scripts.models.classical.logistic_regression    --features semantic
-python -m scripts.models.classical.random_forest          --features semantic
-python -m scripts.models.classical.support_vector_machine --features semantic
-python -m scripts.models.classical.xgboost                --features semantic
-```
+# Gate weight audit — per-class branch routing
+python -m scripts.analysis.branch_weights
 
-The `--features` flag accepts: `semantic`, `lexical`, `syntactic`, `structural`, `affective`, `fused`.
-
-## Analysis Scripts
-
-```bash
-# Gate weight analysis — per-class branch routing from a saved checkpoint
-python -m scripts.analysis.branch_weights --variant content_gate
-
-# Feature statistics — scaled heatmaps (standardised features)
+# Feature statistics — per-class mean heatmaps
 python -m scripts.analysis.feature_statistics
 
-# Feature statistics — raw violin plots per sub-extractor
-python -m scripts.analysis.feature_statistics --raw
-
-# Exploratory data analysis (class distribution, word count KDE)
-python -m scripts.data.analysis
+# Exploratory data analysis
+python -m scripts.data.EDA
 ```
+
+---
 
 ## Output Structure
 
 ```
 results/
-  gated_fusion/
-    {variant}/                    # content_gate | class_aware | load_balance | per_class_gate
-      training/
-        checkpoints/
-          best.pt                 # Model weights at best val_acc epoch
-          handcrafted_scaler.joblib
-        logs/
-          train.log
-          history.json
-          gate_stats_per_epoch.jsonl
-        training_history.csv
-      evaluation/
-        summary.json              # Full metrics + gate stats
-        summary.txt               # Human-readable summary
-        gate_weights_per_class.csv
-        gate_weight_range.json
-        classification_report.csv
-        confusion_matrix/
-          confusion_matrix.csv
-          confusion_matrix.json
-          confusion_matrix.png
-  {feature_config}/               # semantic | fused | ...
-    {model_name}/                 # logistic_regression | random_forest | ...
-      training/
-        checkpoints/model.joblib
-        logs/train.log
-      evaluation/
-        val/metrics.json
-        test/metrics.json
-  plots/
-    feature_statistics/           # Scaled heatmaps per group
-    feature_statistics_raw/       # Raw violin plots per sub-extractor
+  mental_roberta/
+    evaluation/
+      finetune/summary.json
+      confusion_matrix/
+  gated_fusion_seed{N}/         # N = 0, 1, 2, 3, 42
+    training/
+      checkpoints/best.pt
+      checkpoints/handcrafted_scaler.joblib
+      logs/history.json
+    evaluation/
+      summary.json
+      gate_weight_range.json
+      confusion_matrix/
+  concat_mlp_seed{N}/
+    training/
+    evaluation/
+  multi_seed_summary.json       # Aggregated mean ± std across seeds
 ```
+
+---
 
 ## Project Structure
 
 ```
 scripts/
-  config.py                  ← Central config: all paths, constants, hyperparameters
+  config.py                  ← All paths, constants, hyperparameters
   data/
     preprocessing.py
-    analysis.py
+    EDA.py
   features/
-    base.py                  ← FeatureExtractorBase ABC
-    extract.py               ← CLI entry point for batch extraction
+    extract.py               ← CLI for batch feature extraction
     orchestrator.py
-    combination.py           ← Utility: combine sub-extractor parquets (not in main pipeline)
     semantic/
     lexical/
     syntactic/
@@ -219,45 +213,21 @@ scripts/
   models/
     fusion/
       blocks.py              ← ProjectionBlock, ClassifierHead
-      gated.py               ← Four gated fusion variants + factory
-      feature_loader.py      ← Parquet → tensor loading
+      gated.py               ← GatedFusion and ConcatMLP model definitions
       train.py               ← Training loop
-      evaluate.py            ← Standalone evaluation from checkpoint
-    classical/
-      common.py
-      logistic_regression.py
-      random_forest.py
-      support_vector_machine.py
-      xgboost.py
-  evaluation/
-    metrics.py               ← Confusion matrix artifacts
+      evaluate.py            ← Evaluation from checkpoint
+      feature_loader.py      ← Parquet → tensor loading
   analysis/
     branch_weights.py
     feature_statistics.py
-  utils/
-    logging_utils.py
-    outputs.py               ← Path helpers for classical model results
-    combined_features_info.py  ← Utility: inspect combined.parquet files
+  evaluation/
+    metrics.py
+  run_one_seed.py
+  run_multi_seed.py
 tests/
-  models/
-    test_evaluate_fusion.py
-    test_train_fusion.py
-  test_fusion_models.py
-  test_outputs.py
 ```
 
-## Benchmark Results
-
-Best classical baseline: **SVM on semantic features** — Macro F1 = **0.8860**
-
-| Model | Features | Accuracy | Macro F1 |
-|---|---|---|---|
-| Logistic Regression | semantic | 87.50% | 0.8752 |
-| Random Forest | semantic | 88.58% | 0.8859 |
-| **SVM (RBF)** | **semantic** | **88.58%** | **0.8860** |
-| XGBoost | semantic | 88.10% | 0.8812 |
-
-Hardest class: **Bipolar** (most confused with Depression and Anxiety). Easiest class: **None** (F1 ≈ 0.986).
+---
 
 ## Running Tests
 
