@@ -2,9 +2,6 @@
 
 Graduation thesis — Hanoi University of Science and Technology, 2026.
 
-**Student:** Dương Thị Huyền (MSSV 20224317)  
-**Supervisor:** Ph.D. Do Thi Ngoc Diep
-
 ---
 
 ## Overview
