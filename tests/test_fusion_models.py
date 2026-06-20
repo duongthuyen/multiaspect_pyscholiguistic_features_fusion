@@ -10,7 +10,7 @@ from scripts.models.fusion import (
     PerClassGatedFusion,
     build_gated_model,
 )
-from scripts.models.fusion.feature_loader import GROUP_SUBFEATURES
+from scripts.data.feature_loader import GROUP_SUBFEATURES
 
 
 class FusionModelTests(unittest.TestCase):
@@ -87,7 +87,7 @@ class FusionModelTests(unittest.TestCase):
         self.assertEqual(GROUP_SUBFEATURES["affective"], ["goemotions", "vad", "vader"])
 
     def test_split_aware_feature_loader_path_error(self):
-        from scripts.models.fusion.feature_loader import load_subextractor_features
+        from scripts.data.feature_loader import load_subextractor_features
 
         with self.assertRaises(FileNotFoundError) as ctx:
             load_subextractor_features("semantic", "mental_roberta", split="missing")

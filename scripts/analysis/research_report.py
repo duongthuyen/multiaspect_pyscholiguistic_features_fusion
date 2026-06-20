@@ -103,8 +103,14 @@ def _export_feature_selection_tables(df: pd.DataFrame, output_dir: Path) -> dict
 
 
 def _load_mental_roberta_summary() -> tuple[dict | None, dict[str, float]]:
-    summary_path = config.RESULTS_DIR / "mental_roberta" / "summary.json"
-    report_path = config.RESULTS_DIR / "mental_roberta" / "classification_report.csv"
+    model_root = config.RESULTS_DIR / "models" / "lm_based" / "mental_roberta"
+    summary_path = model_root / "evaluation" / "summary.json"
+    if not summary_path.exists():
+        summary_path = model_root / "summary.json"
+
+    report_path = model_root / "evaluation" / "classification_report.csv"
+    if not report_path.exists():
+        report_path = model_root / "classification_report.csv"
 
     summary = _load_summary(summary_path)
     per_class_f1: dict[str, float] = {}
@@ -234,7 +240,8 @@ def _export_model_comparisons(
                 "run_type": "standalone",
                 "variant": "mental_roberta",
                 "threshold": "none",
-                "test_acc": mental_summary.get("test_accuracy"),
+                "test_acc": mental_summary.get("test_acc")
+                or mental_summary.get("test_accuracy"),
                 "macro_f1": mental_summary.get("test_macro_f1"),
                 "weighted_f1": None,
                 "best_val_acc": None,
@@ -243,7 +250,14 @@ def _export_model_comparisons(
                 "affective_gate_mean": None,
                 "handcrafted_gate_mean": None,
                 "dominant_branch": "NA",
-                "summary_path": str(config.RESULTS_DIR / "mental_roberta" / "summary.json"),
+                "summary_path": str(
+                    config.RESULTS_DIR
+                    / "models"
+                    / "lm_based"
+                    / "mental_roberta"
+                    / "evaluation"
+                    / "summary.json"
+                ),
             }
         )
 

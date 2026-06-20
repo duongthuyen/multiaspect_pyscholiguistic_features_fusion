@@ -2,8 +2,8 @@
 Training loop for the Gated Fusion model.
 
 Usage:
-    python -m scripts.models.fusion.train
-    python -m scripts.models.fusion.train --epochs 20 --lr 5e-4
+    python -m scripts.training.fusion_train
+    python -m scripts.training.fusion_train --epochs 20 --lr 5e-4
 
 All defaults live in scripts/config.py. CLI flags override those defaults.
 
@@ -14,8 +14,9 @@ Training behavior:
   gate_weight_decay=1e-4      Gate parameters get dedicated weight decay;
                                other parameters have weight_decay=0.
 
-Outputs written to results/gated_fusion/:
-  training/checkpoints/best.pt
+Results are written to results/models/fusion/gated_fusion/.
+Model artifacts are written to artifacts/models/fusion/gated_fusion/:
+  checkpoints/best.pt
   training/logs/train.log
   training/logs/history.json
   training/logs/gate_stats_per_epoch.jsonl   per-epoch val gate weights
@@ -49,7 +50,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from scripts import config
 from scripts.evaluation.metrics import save_confusion_matrix_artifacts
-from scripts.models.fusion.feature_loader import INPUT_CONFIGS, load_feature_tensors
+from scripts.data.fusion_dataset import INPUT_CONFIGS, load_feature_tensors
 from scripts.models.fusion.gated import build_gated_model
 from scripts.utils.logging_utils import setup_logging
 
@@ -65,12 +66,14 @@ _ROBERTA_BASELINE_F1 = 0.8873
 # ---------------------------------------------------------------------------
 
 def _output_root(cfg: dict | None = None) -> Path:
-    """Root output directory: results/gated_fusion/"""
+    """Root result directory: results/models/fusion/gated_fusion/."""
     return config.RESULTS_DIR / config.GATED_FUSION_OUTPUT_DIR
 
 
 def _ckpt_dir(cfg: dict | None = None) -> Path:
-    return _output_root() / "training" / "checkpoints"
+    # trained weights -> artifacts/ (mirror of the results subpath)
+    rel = _output_root().relative_to(config.RESULTS_DIR)
+    return config.ARTIFACTS_DIR / rel / "checkpoints"
 
 
 def _log_dir(cfg: dict | None = None) -> Path:

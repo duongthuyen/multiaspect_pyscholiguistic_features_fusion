@@ -53,3 +53,6 @@ results/**/*.csv
 .env
 *.key
 credentials.json
+
+# trained model weights/checkpoints (heavy)
+artifacts/

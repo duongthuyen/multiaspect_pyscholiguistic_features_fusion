@@ -8,7 +8,7 @@ Usage
 Commands
 --------
     preprocess          Clean and merge raw CSVs → data/processed/
-    analyze             EDA plots + statistics    → results/plots/analysis/
+    analyze             EDA plots + statistics    → results/analysis/
     extract             Extract feature groups    → data/features/<split>/
     combine             Combine sub-features      → data/features/<group>/<split>/combined.parquet
     train               Train fusion or classical models
@@ -18,6 +18,7 @@ Commands
     research-report     Export report-ready research tables and findings
     report-pack         Alias for research-report
     info                Summarise combined features and validate post_id consistency
+    run                 Multi-seed / cross-attention training orchestrators
 
 Examples
 --------
@@ -36,6 +37,9 @@ Examples
     python -m scripts.main analyze-branches
     python -m scripts.main report-pack
     python -m scripts.main info --validate
+    python -m scripts.main run multi-seed
+    python -m scripts.main run traditional-multi-seed --svd 300
+    python -m scripts.main run cross-attention
 """
 
 from __future__ import annotations
@@ -63,7 +67,7 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
 
 def cmd_analyze(args: argparse.Namespace) -> None:
     from scripts import config
-    from scripts.data.EDA import analyze
+    from scripts.analysis.eda import analyze
 
     setup_logging(log_file=config.PLOTS_DIR / "analysis" / "analyze.log")
     analyze()
@@ -113,7 +117,7 @@ def cmd_combine(args: argparse.Namespace) -> None:
 
 def cmd_train_fusion(args: argparse.Namespace) -> None:
     from scripts import config
-    from scripts.models.fusion.train import train
+    from scripts.training.fusion_train import train
 
     overrides = {
         k: getattr(args, k)
@@ -130,7 +134,7 @@ def cmd_train_fusion(args: argparse.Namespace) -> None:
 
 
 def cmd_train_classical(args: argparse.Namespace) -> None:
-    from scripts.models.classical.common import train_classifier
+    from scripts.training.traditional import train_classifier
 
     model_name = args.model
     features = args.features
@@ -141,7 +145,7 @@ def cmd_train_classical(args: argparse.Namespace) -> None:
         estimator = LogisticRegression(
             max_iter=config.LOGISTIC_REGRESSION_MAX_ITER,
             class_weight="balanced",
-            random_state=config.SEED,
+            random_state=args.seed,
             n_jobs=-1,
         )
     elif model_name == "random_forest":
@@ -151,7 +155,7 @@ def cmd_train_classical(args: argparse.Namespace) -> None:
             n_estimators=config.RANDOM_FOREST_N_ESTIMATORS,
             max_depth=config.RANDOM_FOREST_MAX_DEPTH,
             class_weight="balanced",
-            random_state=config.SEED,
+            random_state=args.seed,
             n_jobs=-1,
         )
     elif model_name == "support_vector_machine":
@@ -161,7 +165,7 @@ def cmd_train_classical(args: argparse.Namespace) -> None:
             C=config.SVM_C,
             kernel=config.SVM_KERNEL,
             class_weight="balanced",
-            random_state=config.SEED,
+            random_state=args.seed,
         )
     elif model_name == "xgboost":
         from xgboost import XGBClassifier
@@ -170,7 +174,7 @@ def cmd_train_classical(args: argparse.Namespace) -> None:
             n_estimators=config.XGBOOST_N_ESTIMATORS,
             max_depth=config.XGBOOST_MAX_DEPTH,
             learning_rate=config.XGBOOST_LEARNING_RATE,
-            random_state=config.SEED,
+            random_state=args.seed,
             n_jobs=-1,
             verbosity=0,
         )
@@ -178,12 +182,13 @@ def cmd_train_classical(args: argparse.Namespace) -> None:
         logger.error("Unknown classical model: %s", model_name)
         sys.exit(1)
 
-    train_classifier(estimator, model_name, features)
+    train_classifier(estimator, model_name, features,
+                     svd_components=args.svd, seed=args.seed)
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
     from scripts import config
-    from scripts.models.fusion.evaluate import evaluate, save_evaluation
+    from scripts.evaluation.fusion_evaluate import evaluate, save_evaluation
     from scripts.utils.logging_utils import setup_logging as _setup
 
     overrides = {"input_config": args.features} if args.features else None
@@ -232,7 +237,7 @@ def cmd_research_report(args: argparse.Namespace) -> None:
 
 
 def cmd_info(args: argparse.Namespace) -> None:
-    from scripts.utils.combined_features_info import (
+    from scripts.analysis.combined_features_info import (
         export_combined_summary,
         log_combined_summary,
         validate_combined_consistency,
@@ -256,7 +261,8 @@ def _build_parser() -> argparse.ArgumentParser:
     # just to print usage text. Keep in sync with config.py and the modules
     # listed in the comments below each constant.
     INPUT_CONFIGS = [                          # feature_loader.py :: INPUT_CONFIGS
-        "semantic", "lexical", "syntactic", "structural", "affective", "fused"
+        "semantic", "lexical", "syntactic", "structural", "affective", "fused",
+        "traditional",
     ]
     DEFAULT_TEXT_COL = "text"                  # config.py :: TEXT_COL
     DEFAULT_TRAIN_CSV = "data/processed/train.csv"
@@ -285,7 +291,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # ── analyze ───────────────────────────────────────────────────────────────
     sub.add_parser(
         "analyze",
-        help="EDA: class distribution, text length, per-class stats → results/plots/analysis/",
+        help="EDA: class distribution, text length, per-class stats → results/analysis/",
     )
 
     # ── extract ───────────────────────────────────────────────────────────────
@@ -377,6 +383,18 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=INPUT_CONFIGS,
         help="Feature input config. Default: fused",
     )
+    tc.add_argument(
+        "--svd",
+        type=int,
+        default=None,
+        help="TruncatedSVD/LSA components for the TF-IDF block (traditional only).",
+    )
+    tc.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed. Default: 42",
+    )
 
     # ── evaluate ──────────────────────────────────────────────────────────────
     ev = sub.add_parser(
@@ -416,7 +434,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # ── analyze-branches ──────────────────────────────────────────────────────
     sub.add_parser(
         "analyze-branches",
-        help="Gate-weight analysis for the trained Gated Fusion model → results/gated_fusion/evaluation/",
+        help="Gate-weight analysis for the trained Gated Fusion model -> results/models/fusion/gated_fusion/evaluation/",
     )
 
     # ── info ──────────────────────────────────────────────────────────────────
@@ -438,7 +456,7 @@ def _build_parser() -> argparse.ArgumentParser:
         )
         rr.add_argument(
             "--feature-report",
-            default="results/plots/feature_statistics/feature_selection_report.csv",
+            default="results/analysis/feature_statistics/feature_selection_report.csv",
             dest="feature_report",
             help="Path to feature_selection_report.csv.",
         )
@@ -450,12 +468,42 @@ def _build_parser() -> argparse.ArgumentParser:
         )
 
 
+    # ── run (multi-seed / cross-attention orchestration) ────────────────
+    rn = sub.add_parser(
+        "run",
+        help="Run a multi-seed / cross-attention training orchestrator",
+    )
+    rn.add_argument(
+        "runner",
+        choices=["multi-seed", "traditional-multi-seed", "cross-attention"],
+        help="Which orchestrator to run",
+    )
+    rn.add_argument(
+        "extra",
+        nargs=argparse.REMAINDER,
+        help="Arguments passed through to the runner (e.g. --svd 300 --seeds 0,1,2)",
+    )
+
+
     return p
 
 
 # =============================================================================
 # DISPATCH
 # =============================================================================
+
+def cmd_run(args: argparse.Namespace) -> None:
+    """Delegate to a multi-seed / cross-attention orchestrator under scripts/models/runners/."""
+    import runpy
+    targets = {
+        "multi-seed":             "scripts.training.runners.run_multi_seed",
+        "traditional-multi-seed": "scripts.training.runners.run_traditional_multi_seed",
+        "cross-attention":        "scripts.training.runners.run_cross_attention",
+    }
+    module = targets[args.runner]
+    sys.argv = [module] + (args.extra or [])
+    runpy.run_module(module, run_name="__main__")
+
 
 _DISPATCH = {
     "preprocess":       cmd_preprocess,
@@ -468,6 +516,7 @@ _DISPATCH = {
     "info":             cmd_info,
     "research-report":  cmd_research_report,
     "report-pack":      cmd_research_report,
+    "run":              cmd_run,
 }
 
 

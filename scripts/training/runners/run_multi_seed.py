@@ -1,13 +1,14 @@
 """
 Multi-seed evaluation: GatedFusion and ConcatMLP.
 
-Trains both models across SEEDS, saves per-seed results to
-    results/gated_fusion_seed{N}/   and   results/concat_mlp_seed{N}/
-then aggregates into
-    results/multi_seed_summary.json
+Trains both models across SEEDS, saves per-seed results under
+    results/models/fusion/gated_fusion/runs/seed{N}/
+    results/models/fusion/concat_mlp/runs/seed{N}/
+then aggregates under
+    results/models/fusion/_summaries/
 
 Usage:
-    python -m scripts.run_multi_seed
+    python -m scripts.main run multi-seed
 """
 
 from __future__ import annotations
@@ -60,11 +61,11 @@ def _per_class_agg(per_seed: list[dict]) -> dict:
 
 def run_gated(seed: int) -> dict:
     # Route output to a seed-specific directory
-    out_dir = f"gated_fusion_seed{seed}"
+    out_dir = f"models/fusion/gated_fusion/runs/seed{seed}"
     config.GATED_FUSION_OUTPUT_DIR = out_dir
 
     # Patch the _output_root in train module so paths resolve correctly
-    import scripts.models.fusion.train as train_mod
+    import scripts.training.fusion_train as train_mod
     train_mod._output_root = lambda cfg=None: config.RESULTS_DIR / out_dir
 
     cfg = config.get_gated_fusion_config(overrides={"seed": seed})
@@ -88,13 +89,13 @@ def run_gated(seed: int) -> dict:
 # ---------------------------------------------------------------------------
 
 def run_concat(seed: int) -> dict:
-    import scripts.models.fusion.concat_baseline as cb
+    import scripts.training.concat_train as cb
 
-    out_dir = config.RESULTS_DIR / f"concat_mlp_seed{seed}"
+    out_dir = config.RESULTS_DIR / "models" / "fusion" / "concat_mlp" / "runs" / f"seed{seed}"
     cb.OUTPUT_DIR = out_dir
     config.SEED = seed  # concat reads config.SEED inside train()
 
-    print(f"  [ConcatMLP   seed={seed}] training → results/concat_mlp_seed{seed}/")
+    print(f"  [ConcatMLP   seed={seed}] training → results/fusion/concat_mlp_seed{seed}/")
     result = cb.train()
     print(f"  [ConcatMLP   seed={seed}] macro_f1={result['macro_f1']:.4f}  acc={result['test_acc']:.4f}")
 
@@ -175,7 +176,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Save
     # ------------------------------------------------------------------
-    out_path = config.RESULTS_DIR / "multi_seed_summary.json"
+    out_path = config.RESULTS_DIR / "models" / "fusion" / "_summaries" / "multi_seed_summary.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)

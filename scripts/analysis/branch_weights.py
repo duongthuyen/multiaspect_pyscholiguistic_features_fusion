@@ -13,9 +13,9 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from scripts import config
-from scripts.models.fusion.feature_loader import load_feature_tensors
+from scripts.data.fusion_dataset import load_feature_tensors
 from scripts.models.fusion.gated import build_gated_model
-from scripts.models.fusion.train import load_labels
+from scripts.training.fusion_train import load_labels
 from scripts.utils.logging_utils import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -27,11 +27,16 @@ def _variant_root(variant: str | None = None) -> Path:
     return config.RESULTS_DIR / config.GATED_FUSION_OUTPUT_DIR
 
 
+def _artifact_root(variant: str | None = None) -> Path:
+    rel = _variant_root(variant).relative_to(config.RESULTS_DIR)
+    return config.ARTIFACTS_DIR / rel
+
+
 def _load_test_loader(variant: str, batch_size: int = 256) -> DataLoader:
     semantic, affective, handcrafted, _ = load_feature_tensors(input_config="fused", split="test")
     labels = load_labels("test")
 
-    scaler_path = _variant_root(variant) / "training" / "checkpoints" / "handcrafted_scaler.joblib"
+    scaler_path = _artifact_root(variant) / "checkpoints" / "handcrafted_scaler.joblib"
     if not scaler_path.exists():
         raise FileNotFoundError(f"Scaler not found: {scaler_path}")
     scaler = joblib.load(scaler_path)
@@ -44,7 +49,7 @@ def _load_test_loader(variant: str, batch_size: int = 256) -> DataLoader:
 
 def _load_model(model_cfg: dict) -> torch.nn.Module:
     variant = model_cfg["model"]
-    ckpt_path = _variant_root(variant) / "training" / "checkpoints" / "best.pt"
+    ckpt_path = _artifact_root(variant) / "checkpoints" / "best.pt"
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
     model = build_gated_model(variant, model_cfg)

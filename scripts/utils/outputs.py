@@ -16,13 +16,14 @@ MODEL_FOLDER_NAMES = {
 def experiment_root(input_config: str, model_name: str | None = None) -> Path:
     selected = input_config.lower()
     model_folder = MODEL_FOLDER_NAMES.get(model_name, model_name) if model_name else None
+    models_root = config.RESULTS_DIR / "models"
     if selected == "fused":
         if model_name is None:
-            return config.RESULTS_DIR / "fused"
-        return config.RESULTS_DIR / "fused" / model_folder
+            return models_root / "fused"
+        return models_root / "fused" / model_folder
     if model_name is None:
-        return config.RESULTS_DIR / selected
-    return config.RESULTS_DIR / selected / model_folder
+        return models_root / selected
+    return models_root / selected / model_folder
 
 
 def training_dir(input_config: str, model_name: str) -> Path:
@@ -34,7 +35,9 @@ def evaluation_dir(input_config: str, model_name: str) -> Path:
 
 
 def checkpoint_dir(input_config: str, model_name: str) -> Path:
-    return training_dir(input_config, model_name) / "checkpoints"
+    """Trained-model artifacts live under ARTIFACTS_DIR (not results/)."""
+    rel = experiment_root(input_config, model_name).relative_to(config.RESULTS_DIR)
+    return config.ARTIFACTS_DIR / rel / "checkpoints"
 
 
 def log_dir(input_config: str, model_name: str) -> Path:

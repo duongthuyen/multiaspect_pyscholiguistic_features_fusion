@@ -1,128 +1,85 @@
+"""Fusion dataset: assemble the three feature branches (semantic, affective,
+handcrafted) as torch tensors for the fusion models.
+
+Sits on top of the numpy feature loader (scripts/data/feature_loader.py): it
+reads the cached feature groups and wraps them as tensors with the branch
+layout the fusion models expect.
+"""
+
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
+from torch.utils.data import DataLoader, Dataset
 
 from scripts import config
+from scripts.data.feature_loader import load_group_features
 
 logger = logging.getLogger(__name__)
 
-GROUP_SUBFEATURES = {
-    "semantic": ["mental_roberta"],
-    "lexical": ["diversity", "word_rates", "pronouns", "punctuation"],
-    "syntactic": ["complexity", "pos_ratios", "readability"],
-    "structural": ["coherence", "tense"],
-    "affective": ["goemotions", "vad", "vader"],
-}
-
-GROUP_DIRS = {
-    "semantic": config.SEMANTIC_FEATURES_DIR,
-    "lexical": config.LEXICAL_FEATURES_DIR,
-    "syntactic": config.SYNTACTIC_FEATURES_DIR,
-    "structural": config.STRUCTURAL_FEATURES_DIR,
-    "affective": config.AFFECTIVE_FEATURES_DIR,
-}
-
-HANDCRAFTED_GROUPS = ["lexical", "syntactic", "structural"]
 INPUT_CONFIGS = list(config.FEATURE_GROUPS) + ["fused"]
 
 
-def _features_to_matrix(series: pd.Series) -> np.ndarray:
-    return np.asarray(series.tolist(), dtype=np.float32)
+class FusionDataset(Dataset):
+    """Torch dataset for fusion models with semantic, affective, handcrafted branches."""
+
+    def __init__(
+        self,
+        semantic: torch.Tensor,
+        affective: torch.Tensor,
+        handcrafted: torch.Tensor,
+        labels: torch.Tensor | None = None,
+        post_ids: list[str] | None = None,
+    ) -> None:
+        n_rows = len(semantic)
+        if len(affective) != n_rows or len(handcrafted) != n_rows:
+            raise ValueError("semantic, affective, and handcrafted tensors must align")
+        if labels is not None and len(labels) != n_rows:
+            raise ValueError(f"feature count {n_rows} != label count {len(labels)}")
+        if post_ids is not None and len(post_ids) != n_rows:
+            raise ValueError(f"feature count {n_rows} != post_id count {len(post_ids)}")
+
+        self.semantic = semantic.float()
+        self.affective = affective.float()
+        self.handcrafted = handcrafted.float()
+        self.labels = labels.long() if labels is not None else None
+        self.post_ids = post_ids
+
+    def __len__(self) -> int:
+        return len(self.semantic)
+
+    def __getitem__(self, idx: int) -> dict:
+        item = {
+            "semantic": self.semantic[idx],
+            "affective": self.affective[idx],
+            "handcrafted": self.handcrafted[idx],
+        }
+        if self.labels is not None:
+            item["labels"] = self.labels[idx]
+        if self.post_ids is not None:
+            item["post_id"] = self.post_ids[idx]
+        return item
 
 
-def _subextractor_feature_path(group: str, sub_name: str, split: str | None = None) -> Path:
-    base_dir = GROUP_DIRS[group]
-    if split:
-        base_dir = base_dir / split
-
-    # Fine-tuned CLS embeddings from Colab take priority over the pre-extracted file.
-    if sub_name == "mental_roberta":
-        cls_candidate = base_dir / "cls_embeddings.parquet"
-        if cls_candidate.exists():
-            return cls_candidate
-
-    candidate = base_dir / f"{sub_name}.parquet"
-    if candidate.exists():
-        return candidate
-
-    if split:
-        candidate_split = base_dir / f"{sub_name}_{split}.parquet"
-        if candidate_split.exists():
-            return candidate_split
-
-    return candidate
-
-
-def _load_wide_format(df: pd.DataFrame) -> tuple[list, np.ndarray]:
-    """Handle cls_embeddings.parquet: 768 numeric columns, no post_id/features columns."""
-    matrix = df.values.astype(np.float32)
-    post_ids = [str(i) for i in range(len(df))]
-    return post_ids, matrix
-
-
-def load_subextractor_features(
-    group: str,
-    sub_name: str,
-    split: str | None = None,
-) -> tuple[list, np.ndarray]:
-    path = _subextractor_feature_path(group, sub_name, split=split)
-    if not path.exists():
-        raise FileNotFoundError(f"Missing feature parquet: {path}")
-    logger.debug("Loading %s.%s from %s", group, sub_name, path)
-    df = pd.read_parquet(path)
-
-    # Wide format: numeric column names, no post_id/features (produced by Colab extraction).
-    if "post_id" not in df.columns and "features" not in df.columns:
-        return _load_wide_format(df)
-
-    if "post_id" not in df.columns or "features" not in df.columns:
-        raise ValueError(f"{path} must contain columns: post_id, features")
-    return df["post_id"].tolist(), _features_to_matrix(df["features"])
-
-
-def _normalize_post_ids(post_ids: list[str]) -> list[str]:
-    """Normalize post_ids to remove prefixes like 'train_', 'val_', etc."""
-    normalized = []
-    for pid in post_ids:
-        if "_" in pid:
-            parts = pid.split("_")
-            if len(parts) >= 2 and parts[-1].isdigit():
-                normalized.append(parts[-1])
-            else:
-                normalized.append(pid)
-        else:
-            normalized.append(pid)
-    return normalized
-
-
-def load_group_features(group: str, split: str | None = None) -> tuple[list, np.ndarray]:
-    if group not in GROUP_SUBFEATURES:
-        raise ValueError(f"Unknown group: {group}")
-
-    reference_ids = None
-    matrices = []
-    for sub_name in GROUP_SUBFEATURES[group]:
-        post_ids, matrix = load_subextractor_features(group, sub_name, split=split)
-        normalized_ids = _normalize_post_ids(post_ids)
-        if reference_ids is None:
-            reference_ids = normalized_ids
-        elif normalized_ids != reference_ids:
-            raise AssertionError(
-                f"post_id order mismatch in {group}.{sub_name} after normalization"
-            )
-        matrices.append(matrix)
-
-    return reference_ids or [], np.concatenate(matrices, axis=1).astype(np.float32)
+def load_labels(split: str) -> torch.Tensor:
+    """Load integer class labels for a processed split."""
+    path_map = {
+        "train": config.TRAIN_PATH,
+        "val": config.VAL_PATH,
+        "test": config.TEST_PATH,
+    }
+    if split not in path_map:
+        raise ValueError("split must be one of: train, val, test")
+    df = pd.read_csv(path_map[split])
+    return torch.tensor(df[config.LABEL_COL].values, dtype=torch.long)
 
 
 def load_fusion_feature_tensors(
     split: str | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list]:
+):
     logger.info("Loading fusion features (split=%s)...", split or "all")
     semantic_ids, semantic = load_group_features("semantic", split=split)
     affective_ids, affective = load_group_features("affective", split=split)
@@ -165,7 +122,7 @@ def load_fusion_feature_tensors(
 def load_feature_tensors(
     input_config: str = "fused",
     split: str | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list]:
+):
     """
     Return three tensors compatible with the fusion model signature.
 
@@ -208,11 +165,55 @@ def load_feature_tensors(
     )
 
 
+def load_fusion_dataset(
+    input_config: str = "fused",
+    split: str = "train",
+    include_labels: bool = True,
+) -> FusionDataset:
+    """Load a processed split as a FusionDataset."""
+    semantic, affective, handcrafted, post_ids = load_feature_tensors(
+        input_config=input_config,
+        split=split,
+    )
+    labels = load_labels(split) if include_labels else None
+    return FusionDataset(
+        semantic=semantic,
+        affective=affective,
+        handcrafted=handcrafted,
+        labels=labels,
+        post_ids=post_ids,
+    )
+
+
+def load_fusion_dataloader(
+    input_config: str = "fused",
+    split: str = "train",
+    batch_size: int = config.FUSION_BATCH_SIZE,
+    shuffle: bool | None = None,
+    include_labels: bool = True,
+    num_workers: int = 0,
+) -> DataLoader:
+    """Build a DataLoader for fusion model training or evaluation."""
+    dataset = load_fusion_dataset(
+        input_config=input_config,
+        split=split,
+        include_labels=include_labels,
+    )
+    if shuffle is None:
+        shuffle = split == "train"
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+    )
+
+
 def apply_feature_masks(
-    affective: torch.Tensor,
-    handcrafted: torch.Tensor,
+    affective,
+    handcrafted,
     masks: dict,
-) -> tuple[torch.Tensor, torch.Tensor]:
+):
     """
     Zero-mask selected feature dimensions in the affective and handcrafted
     tensors according to a selection report mask dict.
@@ -249,28 +250,3 @@ def apply_feature_masks(
         n_hc_dropped,  len(masks["handcrafted"]),
     )
     return aff_masked, hc_masked
-
-
-def load_flat_feature_matrix(
-    input_config: str = "fused",
-    split: str | None = None,
-) -> tuple[list, np.ndarray]:
-    """Return a 2D feature matrix for classical classifiers."""
-    selected = input_config.lower()
-    if selected not in INPUT_CONFIGS:
-        raise ValueError(f"input_config must be one of {INPUT_CONFIGS}")
-    if selected != "fused":
-        return load_group_features(selected, split=split)
-
-    logger.info("Loading flat fused feature matrix (split=%s)...", split or "all")
-    reference_ids = None
-    matrices = []
-    for group in config.FEATURE_GROUPS:
-        ids, matrix = load_group_features(group, split=split)
-        if reference_ids is None:
-            reference_ids = ids
-        elif ids != reference_ids:
-            raise AssertionError(f"post_id order mismatch in fused group {group}")
-        matrices.append(matrix)
-
-    return reference_ids or [], np.concatenate(matrices, axis=1).astype(np.float32)

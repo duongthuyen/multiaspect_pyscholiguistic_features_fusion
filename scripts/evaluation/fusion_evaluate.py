@@ -15,9 +15,9 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from scripts import config
 from scripts.evaluation.metrics import save_confusion_matrix_artifacts
-from scripts.models.fusion.feature_loader import INPUT_CONFIGS, load_feature_tensors
+from scripts.data.fusion_dataset import INPUT_CONFIGS, load_feature_tensors
 from scripts.models.fusion.gated import build_gated_model
-from scripts.models.fusion.train import load_labels
+from scripts.training.fusion_train import load_labels
 from scripts.utils.logging_utils import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -27,11 +27,16 @@ def _variant_root(variant: str | None = None) -> Path:
     return config.RESULTS_DIR / config.GATED_FUSION_OUTPUT_DIR
 
 
+def _artifact_root(variant: str | None = None) -> Path:
+    rel = _variant_root(variant).relative_to(config.RESULTS_DIR)
+    return config.ARTIFACTS_DIR / rel
+
+
 def load_model_and_scaler(model_cfg: dict):
     variant = model_cfg["model"]
-    root = _variant_root(variant)
-    ckpt_path = root / "training" / "checkpoints" / "best.pt"
-    scaler_path = root / "training" / "checkpoints" / "handcrafted_scaler.joblib"
+    artifact_root = _artifact_root(variant)
+    ckpt_path = artifact_root / "checkpoints" / "best.pt"
+    scaler_path = artifact_root / "checkpoints" / "handcrafted_scaler.joblib"
 
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")

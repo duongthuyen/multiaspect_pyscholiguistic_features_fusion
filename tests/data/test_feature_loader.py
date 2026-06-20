@@ -13,9 +13,9 @@ import numpy as np
 import pandas as pd
 import torch
 
-import scripts.models.fusion.feature_loader as loader_mod
+import scripts.data.feature_loader as loader_mod
 from scripts import config
-from scripts.models.fusion.feature_loader import (
+from scripts.data.feature_loader import (
     _normalize_post_ids,
     _subextractor_feature_path,
     load_flat_feature_matrix,
@@ -203,7 +203,7 @@ class LoadFeatureTensorsTests(unittest.TestCase):
 
     def test_semantic_single_group_fills_semantic_branch(self):
         self._write_semantic(n_rows=4)
-        from scripts.models.fusion.feature_loader import load_feature_tensors
+        from scripts.data.feature_loader import load_feature_tensors
         sem, aff, hc, ids = load_feature_tensors("semantic", split="train")
         self.assertEqual(sem.shape, (4, config.SEMANTIC_DIM))
         # Affective and handcrafted branches should be zero-filled
@@ -215,7 +215,7 @@ class LoadFeatureTensorsTests(unittest.TestCase):
             _write_feature_parquet(
                 self._base / "affective", sub_name, n_rows=5, dim=dim, split="train"
             )
-        from scripts.models.fusion.feature_loader import load_feature_tensors
+        from scripts.data.feature_loader import load_feature_tensors
         sem, aff, hc, ids = load_feature_tensors("affective", split="train")
         self.assertEqual(aff.shape, (5, config.AFFECTIVE_DIM))
         self.assertTrue((sem == 0).all())
@@ -223,14 +223,14 @@ class LoadFeatureTensorsTests(unittest.TestCase):
 
     def test_tensors_are_torch_float32(self):
         self._write_semantic(n_rows=3)
-        from scripts.models.fusion.feature_loader import load_feature_tensors
+        from scripts.data.feature_loader import load_feature_tensors
         sem, aff, hc, _ = load_feature_tensors("semantic", split="train")
         for t in (sem, aff, hc):
             self.assertIsInstance(t, torch.Tensor)
             self.assertEqual(t.dtype, torch.float32)
 
     def test_invalid_config_raises_value_error(self):
-        from scripts.models.fusion.feature_loader import load_feature_tensors
+        from scripts.data.feature_loader import load_feature_tensors
         with self.assertRaises(ValueError):
             load_feature_tensors("invalid_group", split="train")
 

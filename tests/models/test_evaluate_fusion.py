@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 import scripts.config as cfg
-from scripts.models.fusion.evaluate import save_evaluation
+from scripts.evaluation.fusion_evaluate import save_evaluation
 
 _ORIG_RESULTS_DIR = cfg.RESULTS_DIR
 

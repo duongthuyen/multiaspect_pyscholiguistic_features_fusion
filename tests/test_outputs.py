@@ -96,9 +96,10 @@ class CheckpointDirTests(unittest.TestCase):
         path = checkpoint_dir("fused", "logistic_regression")
         self.assertEqual(path.name, "checkpoints")
 
-    def test_is_under_training_dir(self):
+    def test_is_under_artifacts_dir(self):
         path = checkpoint_dir("fused", "logistic_regression")
-        self.assertEqual(path.parent, training_dir("fused", "logistic_regression"))
+        self.assertEqual(path.name, "checkpoints")
+        self.assertIn(cfg.ARTIFACTS_DIR, path.parents)
 
 
 class LogDirTests(unittest.TestCase):

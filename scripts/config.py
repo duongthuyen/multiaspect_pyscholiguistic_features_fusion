@@ -46,12 +46,14 @@ TEST_PATH       = PROCESSED_DIR / "test.csv"
 # =============================================================================
 # results/ holds publication-relevant artifacts. Training and evaluation outputs
 # are grouped by model family, for example:
-#   results/gated_fusion/<variant>/training/
-#   results/gated_fusion/<variant>/evaluation/
+#   results/models/fusion/gated_fusion/training/
+#   results/models/fusion/gated_fusion/evaluation/
 
 RESULTS_DIR     = ROOT_DIR / "results"
-MODELS_DIR      = RESULTS_DIR / "models"
-PLOTS_DIR       = RESULTS_DIR / "plots"
+MODELS_DIR      = RESULTS_DIR / "models"   # per-model RESULTS (metrics/logs) live here
+ARTIFACTS_DIR   = ROOT_DIR / "artifacts"   # trained model weights/checkpoints (heavy; gitignored)
+ANALYSIS_RESULTS_DIR = RESULTS_DIR / "analysis"   # analysis outputs (plots, stats)
+PLOTS_DIR       = ANALYSIS_RESULTS_DIR            # alias kept for existing call sites
 
 
 # =============================================================================
@@ -98,7 +100,8 @@ def require_nrc_vad() -> None:
 # MODEL SUB-DIRECTORIES
 # =============================================================================
 
-ROBERTA_MODEL_DIR     = MODELS_DIR / "roberta"
+LM_BASED_MODEL_DIR    = ARTIFACTS_DIR / "models" / "lm_based"
+ROBERTA_MODEL_DIR     = LM_BASED_MODEL_DIR / "mental_roberta"
 FINETUNED_ROBERTA_DIR = ROBERTA_MODEL_DIR / "finetuned"  # fine-tuned backbone without classification head
 
 
@@ -209,7 +212,7 @@ TOTAL_FEATURE_DIM = sum(FEATURE_DIMS.values())
 # FUSION MODEL SETTINGS
 # =============================================================================
 # Output layout for the gated fusion model.
-GATED_FUSION_OUTPUT_DIR = "gated_fusion"
+GATED_FUSION_OUTPUT_DIR = "models/fusion/gated_fusion"
 GATED_FUSION_INPUT_CONFIG = "fused"
 DEFAULT_GATED_VARIANT = "gated_fusion"
 
@@ -219,6 +222,9 @@ GATED_GATE_HIDDEN_DIM = 128
 GATED_HANDCRAFTED_DROPOUT = 0.4
 GATED_AUX_WEIGHT = 0.3          # weight for auxiliary semantic classification loss
 GATED_DIVERSITY_WEIGHT = 0.01   # weight for gate-diversity penalty (lambda_div)
+
+# Cross-attention fusion (projection dim + handcrafted dropout reuse the GATED_* values)
+CROSS_ATTN_NUM_HEADS = 4
 
 # Training defaults
 FUSION_LR = 5e-4
@@ -287,6 +293,24 @@ XGBOOST_N_ESTIMATORS = 500
 XGBOOST_MAX_DEPTH = 6
 XGBOOST_LEARNING_RATE = 0.05
 
+# Traditional paradigm: default TruncatedSVD/LSA size for heavy models (RF/SVM/XGB).
+TRADITIONAL_SVD_COMPONENTS = 300
+
+# TF-IDF representation for the traditional paradigm.
+#   (1,2)-grams; min_df=2 drops hapax/typos; max_df=0.9 drops near-stopwords;
+#   sublinear_tf dampens repeats; stop_words=None KEEPS first-person pronouns
+#   (clinically informative). See scripts/models/traditional/tfidf_pipeline.py.
+TFIDF_PARAMS = dict(
+    ngram_range=(1, 2),
+    min_df=2,
+    max_df=0.9,
+    max_features=20000,
+    sublinear_tf=True,
+    stop_words=None,
+    strip_accents="unicode",
+    lowercase=True,
+)
+
 
 
 
@@ -295,3 +319,6 @@ XGBOOST_LEARNING_RATE = 0.05
 # ============================================================================================
 
 SEED = 42
+
+# Seeds for multi-seed evaluation (mean +/- std), shared across paradigms.
+SEEDS = [0, 1, 2, 3, 42]

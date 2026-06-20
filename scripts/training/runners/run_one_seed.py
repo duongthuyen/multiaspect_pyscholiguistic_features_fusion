@@ -11,9 +11,10 @@ out_file = Path(sys.argv[2])
 results = json.loads(out_file.read_text()) if out_file.exists() else {"gated": [], "concat": []}
 
 # ---------- GatedFusion ----------
-import scripts.models.fusion.train as train_mod
-config.GATED_FUSION_OUTPUT_DIR = f"gated_fusion_seed{seed}"
-train_mod._output_root = lambda cfg=None: config.RESULTS_DIR / f"gated_fusion_seed{seed}"
+import scripts.training.fusion_train as train_mod
+gated_out = f"models/fusion/gated_fusion/runs/seed{seed}"
+config.GATED_FUSION_OUTPUT_DIR = gated_out
+train_mod._output_root = lambda cfg=None: config.RESULTS_DIR / gated_out
 cfg = config.get_gated_fusion_config(overrides={"seed": seed})
 r = train_mod.train(cfg)
 results["gated"].append({
@@ -23,8 +24,10 @@ results["gated"].append({
 print(f"[GatedFusion  seed={seed}] F1={r['macro_f1']:.4f}  acc={r['test_acc']:.4f}  epochs={r['epochs_trained']}")
 
 # ---------- ConcatMLP ----------
-import scripts.models.fusion.concat_baseline as cb
-cb.OUTPUT_DIR = config.RESULTS_DIR / f"concat_mlp_seed{seed}"
+import scripts.training.concat_train as cb
+cb.OUTPUT_DIR = (
+    config.RESULTS_DIR / "models" / "fusion" / "concat_mlp" / "runs" / f"seed{seed}"
+)
 config.SEED = seed
 rc = cb.train()
 results["concat"].append({

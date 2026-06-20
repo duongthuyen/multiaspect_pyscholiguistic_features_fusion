@@ -14,8 +14,8 @@ import numpy as np
 import pandas as pd
 
 import scripts.config as cfg
-import scripts.utils.combined_features_info as mod
-from scripts.utils.combined_features_info import (
+import scripts.analysis.combined_features_info as mod
+from scripts.analysis.combined_features_info import (
     export_combined_summary,
     get_combined_info,
     load_all_combined_tensors,

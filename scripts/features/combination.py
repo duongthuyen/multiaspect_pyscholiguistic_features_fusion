@@ -5,7 +5,7 @@ import logging
 import pandas as pd
 
 from scripts import config
-from scripts.models.fusion.feature_loader import load_group_features
+from scripts.data.feature_loader import load_group_features
 from scripts.utils.logging_utils import setup_logging
 
 logger = logging.getLogger(__name__)

@@ -13,7 +13,7 @@ import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
-from scripts.models.fusion.train import (
+from scripts.training.fusion_train import (
     _predict,
     _scale_hc,
     accuracy,
